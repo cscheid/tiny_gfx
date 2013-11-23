@@ -1,7 +1,8 @@
 from tiny_gfx import *
 import sys
+import cProfile
 
-if __name__ == '__main__':
+def do_it():
     i = Image(8, Color(0,0,0,1))
     g = ShapeGrob(Triangle(Vector(0.2,0.1), Vector(0.9, 0.3), Vector(0.1, 0.4)),
                   Color(1,0,0,1))
@@ -12,3 +13,6 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'w') as f:
         i.write_ppm(f)
     
+if __name__ == '__main__':
+    do_it()
+    # cProfile.run("do_it()", sort="time")

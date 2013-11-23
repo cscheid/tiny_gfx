@@ -1,5 +1,3 @@
-import functools
-
 class Vector:
     def __init__(self, x, y): self.x, self.y = x, y
     def __add__(self, o): return Vector(self.x + o.x, self.y + o.y)
@@ -67,10 +65,12 @@ class Image:
             for x in range(self.resolution):
                 out.buffer.write(self.pixels[x][y].as_ppm())
 
-def union(*boundeds):
-    return functools.reduce(lambda b1, b2: Rectangle(b1.low.min(b2.low),
-                                                     b1.high.max(b2.high)),
-                            (b.bounds() for b in boundeds))
+def union(b, *rest):
+    b = b.bounds()
+    for r in rest:
+        r = r.bounds()
+        b = Rectangle(b.low.min(r.low), b.high.max(r.high))
+    return b
 
 # true if p3 is to the left side of the vector going from p1 to p2
 def is_ccw(p1, p2, p3): return (p2 - p1).cross(p3 - p1) > 0
@@ -84,17 +84,12 @@ class ShapeGrob:
         if self.contains(address.bounds().midpoint()): return self.color
         else: return Color(0,0,0,0)
 
-def iterate_pixels(resolution, address):
-    if resolution > address.level:
-        for child in address.split():
-            yield from iterate_pixels(resolution, child)
-    else: yield address
-
 def iterate_pixels_inside(resolution, address, shape):
     if not shape.bounds().overlaps(address.bounds()): return
     if resolution > address.level:
         for child in address.split():
-            yield from iterate_pixels_inside(resolution, child, shape)
+            for i in iterate_pixels_inside(resolution, child, shape):
+                yield i
     else: yield address
     
 def draw_on_image(resolution, grob, image):
