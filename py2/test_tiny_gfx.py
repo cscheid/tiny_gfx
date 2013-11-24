@@ -4,14 +4,24 @@ import cProfile
 
 def do_it():
     i = Image(8, Color(0,0,0,1))
-    ShapeGrob(Triangle(Vector(0.2,0.1), Vector(0.9,0.3), Vector(0.1,0.4)),
-              Color(1,0,0,1)).draw_on_image(i)
-    ShapeGrob(Triangle(Vector(0.5,0.2), Vector(1,0.4), Vector(0.2,0.7)),
-              Color(0,1,0,0.5)).draw_on_image(i)
-    ShapeGrob(Rectangle(Vector(0.1,0.7), Vector(0.6,0.8)),
-              Color(0,0.5,0.8,0.5)).draw_on_image(i)
-    ShapeGrob(Circle(Vector(0.5,0.9), 0.2),
-              Color(1,1,0,1)).draw_on_image(i)
+    shapes = [
+        ShapeGrob(Triangle(Vector(0.2,0.1), Vector(0.9,0.3), Vector(0.1,0.4)),
+                  Color(1,0,0,1)),
+        ShapeGrob(Triangle(Vector(0.5,0.2), Vector(1,0.4), Vector(0.2,0.7)),
+                  Color(0,1,0,0.5)),
+        ShapeGrob(Rectangle(Vector(0.1,0.7), Vector(0.6,0.8)),
+                  Color(0,0.5,0.8,0.5)),
+        ShapeGrob(Circle(Vector(0.5,0.9), 0.2),
+                  Color(1,1,0,1)),
+        # ShapeGrob(Circle(Vector(0.9,0.5), 0.2),
+        #           Color(0,1,1,0.5))
+        # TransformedShapeGrob(translate(0.9, 0.5),
+        #                      Circle(Vector(0, 0), 0.2),
+        #                      Color(0,1,1,0.5))
+        ]
+    for shape in shapes:
+        draw(i, shape)
+
     f = open(sys.argv[1], 'w')
     i.write_ppm(f)
     f.close()

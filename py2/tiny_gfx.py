@@ -1,3 +1,7 @@
+import math
+import array
+from itertools import product
+
 class Vector:
     def __init__(self, x, y): self.x, self.y = x, y
     def __add__(self, o): return Vector(self.x + o.x, self.y + o.y)
@@ -9,6 +13,7 @@ class Vector:
     def min(self, o): return Vector(min(self.x, o.x), min(self.y, o.y))
     def max(self, o): return Vector(max(self.x, o.x), max(self.y, o.y))
     def length(self): return (self.x ** 2 + self.y ** 2) ** 0.5
+    def __str__(self): return "[%f, %f]" % (self.x, self.y)
 
 class Rectangle:
     def __init__(self, p1, p2): self.low, self.high = p1.min(p2), p1.max(p2)
@@ -20,20 +25,23 @@ class Rectangle:
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
+    def area(self): return (self.high.y - self.low.y) * (self.high.x - self.low.x)
 
 class Triangle:
     def __init__(self, a, b, c):
         self.p1, self.p2, self.p3 = (a, b, c) if is_ccw(a, b, c) else (a, c, b)
-    def bounds(self): return union(self.p1, self.p2, self.p3)
+        self.b = union(self.p1, self.p2, self.p3)
+    def bounds(self): return self.b
     def contains(self, p):
         return all([is_ccw(self.p1, self.p2, p),
                     is_ccw(self.p2, self.p3, p), is_ccw(self.p3, self.p1, p)])
 
 class Circle:
-    def __init__(self, c, r): self.center, self.radius = c, r
-    def bounds(self):
+    def __init__(self, c, r):
+        self.center, self.radius = c, r
         d = Vector(self.radius, self.radius)
-        return Rectangle(self.center - d, self.center + d)
+        self.b = Rectangle(self.center - d, self.center + d)
+    def bounds(self): return self.b
     def contains(self, p):
         return (p - self.center).length() <= self.radius
 
@@ -46,7 +54,7 @@ class Color:
         return Color(u * s.r + v * o.r, u * s.g + v * o.g, u * s.b + v * o.b, a)
     def as_ppm(s):
         def byte(v): return int(v ** (1.0 / 2.2) * 255)
-        return bytearray([byte(s.r * s.a), byte(s.g * s.a), byte(s.b * s.a)])
+        return "%c%c%c" % (byte(s.r * s.a), byte(s.g * s.a), byte(s.b * s.a))
 
 class Address:
     def __init__(self, x, y, level):
@@ -62,19 +70,56 @@ class Address:
 class Image:
     def __init__(self, resolution, bg=Color(0,0,0,0)):
         self.resolution = resolution
-        self.npixels = 2 ** resolution
-        self.pixels = [[bg for x in range(2 ** resolution)]
-                       for y in range(2 ** resolution)]
-    def __getitem__(self, address): return self.pixels[address.x][address.y]
-    def __setitem__(self, address, color):
-        self.pixels[address.x][address.y] = color
+        self.pixels = [[bg for i in xrange(2 ** resolution)]
+                       for j in xrange(2 ** resolution)]
+    def __getitem__(self, a):
+        return self.pixels[a.y][a.x]
+    def __setitem__(self, a, color):
+        self.pixels[a.y][a.x] = color
+    # def set(self, a, color):
+    #     w = 2 ** max(0, self.resolution - a.level)
+    #     n = self.npixels
+    #     for y, x in product(xrange(w), xrange(w)):
+    #         self.pixels[a.y * self.npixels + a.x] = color
     def write_ppm(self, out):
-        out.write("P6\n%s\n%s\n255\n" % (self.npixels, self.npixels))
-        out.flush()
-        for y in range(self.npixels-1, -1, -1):
-            for x in range(self.npixels):
-                out.write(self.pixels[x][y].as_ppm())
+        n = 2 ** self.resolution
+        out.write("P6\n%s\n%s\n255\n" % (n,n))
+        for y, x in product(xrange(n-1,-1,-1), xrange(n)):
+            out.write(self.pixels[y][x].as_ppm())
 
+# affine 2D transforms, encoded by a matrix
+# ( m11 m12 tx )
+# ( m21 m22 ty )
+# (  0   0   1 )
+# vectors are to be interpreted as (vx vy 1)
+class Transform:
+    def __init__(self, m11, m12, tx, m21, m22, ty):
+        self.m = [[m11, m12, tx], [m21, m22, ty], [0, 0, 1]]
+    def __mul__(self, other): # ugly
+        if isinstance(other, Transform):
+            t = [[0] * 3 for i in xrange(3)]
+            for i, j, k in product(xrange(3), repeat=3):
+                t[i][j] += self.m[i][k] * other.m[k][j]
+            return Transform(t[0][0], t[0][1], t[0][2],
+                             t[1][0], t[1][1], t[1][2])
+        else:
+            nx = self.m[0][0] * other.x + self.m[0][1] * other.y + self.m[0][2]
+            ny = self.m[1][0] * other.x + self.m[1][1] * other.y + self.m[1][2]
+            return Vector(nx, ny)
+    def det(s): return s.m[0][0] * s.m[1][1] - s.m[0][1] * s.m[1][0]
+    def inverse(self):
+        d = 1.0 / self.det()
+        return Transform(d * self.m[1][1], -d * self.m[0][1], -self.m[0][2],
+                         -d * self.m[1][0], d * self.m[0][0], -self.m[1][2])
+    def __str__(self):
+        return str(self.m)
+
+def rotate(theta):
+    s, c = math.sin(theta), math.cos(theta)
+    return Transform(c, -s, 0, s, c, 0)
+def translate(tx, ty): return Transform(1, 0, tx, 0, 1, ty)
+def scale(x, y): return Transform(x, 0, 0, 0, y, 0)
+def around(v, t): return translate(v.x, v.y) * t * translate(-v.x, -v.y)    
 def union(b, *rest):
     b = b.bounds()
     for r in rest:
@@ -85,21 +130,6 @@ def union(b, *rest):
 # true if p3 is to the left side of the vector going from p1 to p2
 def is_ccw(p1, p2, p3): return (p2 - p1).cross(p3 - p1) > 0
 
-# "Grob" for graphics object
-class ShapeGrob:
-    def __init__(self, shape, color):
-        self.shape, self.color = shape, color
-    def contains(self, p): return self.shape.contains(p)
-    def pixel_color(self, address):
-        if self.contains(address.bounds().midpoint()): return self.color
-        else: return Color(0,0,0,0)
-    def draw_on_image(self, image):
-        resolution = image.resolution
-        b = self.shape.bounds()
-        base = Address(0,0,0)
-        for pixel in iterate_pixels_inside(resolution, base, self.shape):
-            image[pixel] = image[pixel].over(self.pixel_color(pixel))
-        
 def iterate_pixels_inside(resolution, address, shape):
     if not shape.bounds().overlaps(address.bounds()): return
     if resolution > address.level:
@@ -107,3 +137,20 @@ def iterate_pixels_inside(resolution, address, shape):
             for i in iterate_pixels_inside(resolution, child, shape):
                 yield i
     else: yield address
+
+# "Grob" for graphics object
+class ShapeGrob:
+    def __init__(self, shape, color):
+        self.shape, self.color = shape, color
+        self.leaf = True
+    def contains(self, p): return self.shape.contains(p)
+    def color_at(self, point):
+        if self.contains(point): return self.color
+        else: return Color(0,0,0,0)
+    
+def draw(image, grob):
+    resolution = image.resolution
+    b = grob.shape.bounds()
+    base = Address(0,0,0)
+    for pixel in iterate_pixels_inside(resolution, base, grob.shape):
+        image[pixel] = image[pixel].over(grob.color_at(pixel.bounds().midpoint()))
