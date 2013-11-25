@@ -1,5 +1,6 @@
 import math
 import array
+import copy
 from itertools import product
 
 class Vector:
@@ -9,45 +10,96 @@ class Vector:
     def __neg__(self): return Vector(-self.x, -self.y)
     def __mul__(self, k): return Vector(self.x * k, self.y * k)
     def cross(self, o): return self.x * o.y - self.y * o.x
-    def bounds(self): return Rectangle(self, self)
+    def bounds(self): return AABox(self, self)
     def min(self, o): return Vector(min(self.x, o.x), min(self.y, o.y))
     def max(self, o): return Vector(max(self.x, o.x), max(self.y, o.y))
     def length(self): return (self.x ** 2 + self.y ** 2) ** 0.5
-    def __str__(self): return "[%f, %f]" % (self.x, self.y)
+    def __str__(self): return "v[%s, %s]" % (self.x, self.y)
+    def __repr__(self): return "v[%s, %s]" % (self.x, self.y)
 
-class Rectangle:
+# true if v3 is to the right side of the vector going from v1 to v2
+def is_cw(v1, v2, v3): return (v2 - v1).cross(v3 - v1) < 0
+
+# axis-aligned box
+class AABox:
     def __init__(self, p1, p2): self.low, self.high = p1.min(p2), p1.max(p2)
     def midpoint(self): return (self.low + self.high) * 0.5
     def bounds(self): return self
-    def contains(self, p):
-        return (self.low.x <= p.x <= self.high.x and
-                self.low.y <= p.y <= self.high.y)
+    def size(self): return self.high - self.low
+    def contains(s, p):
+        return (s.low.x <= p.x <= s.high.x and s.low.y <= p.y <= s.high.y)
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
-    def area(self): return (self.high.y - self.low.y) * (self.high.x - self.low.x)
+    def area(s): return (s.high.y - s.low.y) * (s.high.x - s.low.x)
 
-class Triangle:
-    def __init__(self, a, b, c):
-        self.p1, self.p2, self.p3 = (a, b, c) if is_ccw(a, b, c) else (a, c, b)
-        self.b = union(self.p1, self.p2, self.p3)
-    def bounds(self): return self.b
-    def contains(self, p):
-        return all([is_ccw(self.p1, self.p2, p),
-                    is_ccw(self.p2, self.p3, p), is_ccw(self.p3, self.p1, p)])
+def union(b, *rest):
+    b = b.bounds()
+    for r in rest:
+        r = r.bounds()
+        b = AABox(b.low.min(r.low), b.high.max(r.high))
+    return b
 
-class Circle:
-    def __init__(self, c, r):
-        self.center, self.radius = c, r
-        d = Vector(self.radius, self.radius)
-        self.b = Rectangle(self.center - d, self.center + d)
-    def bounds(self): return self.b
-    def contains(self, p):
-        return (p - self.center).length() <= self.radius
+# a *convex* poly, in ccw order of vertices, with no repeating vertices
+# non-convex polys will break this
+class Poly:
+    def __init__(self, *ps):
+        mn = min(enumerate(ps), key=lambda (i,v): (v.y, v.x))[0]
+        self.vs = list(ps[mn:]) + list(ps[:mn])
+        self.bound = None
+    def bounds(self):
+        if self.bound is None: self.bound = union(*self.vs)
+        return self.bound
+    def area(self):
+        return sum(a.cross(b) for (a,b) in
+                   zip(self.vs, self.vs[1:] + [self.vs[0]])) / 2.0
+    def slop(self): return self.bounds().area() / self.area()
+    def contains(s, p):
+        l = len(s.vs)
+        return not any(is_cw(s.vs[i], s.vs[(i+1) % l], p) for i in xrange(l))
+    def flip(self): return Poly(*list(Vector(v.y, v.x) for v in self.vs[::-1]))
+    def split(self):
+        def split_chain(a, v, key):
+            # based on http://hg.python.org/cpython/file/2.7/Lib/bisect.py
+            lo, hi, kv = 0, len(a), key(v)
+            while lo < hi:
+                mid = (lo+hi)//2
+                if key(a[mid]) < kv: lo = mid+1
+                else: hi = mid
+            if key(a[lo]) <> kv:
+                u = (v.y - a[lo-1].y) / (a[lo].y - a[lo-1].y)
+                v.x = u * a[lo].x + (1-u) * a[lo-1].x
+                a.insert(lo, v)
+            return lo
+        sz = self.bounds().size()
+        if sz.y >= sz.x:
+            max_index_y = max(enumerate(self.vs),
+                              key=lambda (i,v): (v.y, v.x))[0]
+            upward = self.vs[0:max_index_y+1]
+            downward = self.vs[max_index_y:] + [self.vs[0]]
+            mid_y = self.bounds().midpoint().y
+            i_u = split_chain(upward, Vector(None, mid_y), lambda k: k.y)
+            i_d = split_chain(downward, Vector(None, mid_y), lambda k: -k.y)
+            return [Quad(*(upward[:i_u+1] + downward[i_d:-1])),
+                    Quad(*(upward[i_u:-1] + downward[:i_d+1]))]
+        else: return list(x.flip() for x in self.flip().split())
+Triangle, Quad = Poly, Poly
+
+def Rectangle(v1, v2):
+    return Quad(Vector(min(v1.x, v2.x), min(v1.y, v2.y)),
+                Vector(max(v1.x, v2.x), min(v1.y, v2.y)),
+                Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
+                Vector(min(v1.x, v2.x), max(v1.y, v2.y)))
+
+def Circle(center, radius, k = 30):
+    d = math.pi * 2 / k
+    lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
+           for i in xrange(k)]
+    return Poly(*lst)
 
 class Color:
     def __init__(self, r, g, b, a=1): self.r, self.g, self.b, self.a = r,g,b,a
-    def over(o, s):
+    def over(s, o):
         if s.a == o.a == 0.0: return s
         a = 1.0 - (1.0 - s.a) * (1.0 - o.a)
         u, v = s.a / a, 1 - s.a / a
@@ -55,34 +107,17 @@ class Color:
     def as_ppm(s):
         def byte(v): return int(v ** (1.0 / 2.2) * 255)
         return "%c%c%c" % (byte(s.r * s.a), byte(s.g * s.a), byte(s.b * s.a))
-
-class Address:
-    def __init__(self, x, y, level):
-        self.x, self.y, self.level = x, y, level
-    def bounds(self):
-        return Rectangle(Vector(self.x, self.y) * 0.5 ** self.level,
-                         Vector(self.x + 1, self.y + 1) * 0.5 ** self.level)
-    def split(self):
-        for dx, dy in ((0,0), (1, 0), (0,1), (1, 1)):
-            yield Address(2 * self.x + dx, 2 * self.y + dy, self.level + 1)
-    def __str__(self): return "[%s,%s,%s]" % (self.x, self.y, self.level)
-
+        
 class Image:
     def __init__(self, resolution, bg=Color(0,0,0,0)):
-        self.resolution = resolution
-        self.pixels = [[bg for i in xrange(2 ** resolution)]
-                       for j in xrange(2 ** resolution)]
-    def __getitem__(self, a):
-        return self.pixels[a.y][a.x]
-    def __setitem__(self, a, color):
-        self.pixels[a.y][a.x] = color
-    # def set(self, a, color):
-    #     w = 2 ** max(0, self.resolution - a.level)
-    #     n = self.npixels
-    #     for y, x in product(xrange(w), xrange(w)):
-    #         self.pixels[a.y * self.npixels + a.x] = color
+        self.resolution = 2 ** resolution
+        self.pixels = [[bg for i in xrange(self.resolution)]
+                       for j in xrange(self.resolution)]
+    def bounds(self): return AABox(Vector(0,0), Vector(1,1))
+    def __getitem__(self, a): return self.pixels[a.y][a.x]
+    def __setitem__(self, a, color): self.pixels[a.y][a.x] = color
     def write_ppm(self, out):
-        n = 2 ** self.resolution
+        n = self.resolution
         out.write("P6\n%s\n%s\n255\n" % (n,n))
         for y, x in product(xrange(n-1,-1,-1), xrange(n)):
             out.write(self.pixels[y][x].as_ppm())
@@ -120,37 +155,35 @@ def rotate(theta):
 def translate(tx, ty): return Transform(1, 0, tx, 0, 1, ty)
 def scale(x, y): return Transform(x, 0, 0, 0, y, 0)
 def around(v, t): return translate(v.x, v.y) * t * translate(-v.x, -v.y)    
-def union(b, *rest):
-    b = b.bounds()
-    for r in rest:
-        r = r.bounds()
-        b = Rectangle(b.low.min(r.low), b.high.max(r.high))
-    return b
-
-# true if p3 is to the left side of the vector going from p1 to p2
-def is_ccw(p1, p2, p3): return (p2 - p1).cross(p3 - p1) > 0
-
-def iterate_pixels_inside(resolution, address, shape):
-    if not shape.bounds().overlaps(address.bounds()): return
-    if resolution > address.level:
-        for child in address.split():
-            for i in iterate_pixels_inside(resolution, child, shape):
-                yield i
-    else: yield address
 
 # "Grob" for graphics object
 class ShapeGrob:
     def __init__(self, shape, color):
         self.shape, self.color = shape, color
-        self.leaf = True
     def contains(self, p): return self.shape.contains(p)
     def color_at(self, point):
         if self.contains(point): return self.color
         else: return Color(0,0,0,0)
-    
+
+def TransformedShapeGrob(xform, shape, color):
+    c = copy.copy(shape)
+    c.vs = [xform * v for v in shape.vs]
+    return ShapeGrob(c, color)
+
 def draw(image, grob):
-    resolution = image.resolution
-    b = grob.shape.bounds()
-    base = Address(0,0,0)
-    for pixel in iterate_pixels_inside(resolution, base, grob.shape):
-        image[pixel] = image[pixel].over(grob.color_at(pixel.bounds().midpoint()))
+    shapes, r = [grob.shape], image.resolution
+    ib = image.bounds()
+    min_area = 4.0 / (image.resolution ** 2)
+    while len(shapes):
+        shape = shapes.pop()
+        tb = shape.bounds()
+        if not tb.overlaps(ib): continue
+        if shape.slop() < 5 or tb.area() < min_area:
+            l_x, l_y = max(0, int(tb.low.x * r)), max(0, int(tb.low.y * r))
+            h_x, h_y = min(r-1, int(tb.high.x * r)), min(r-1, int(tb.high.y * r))
+            for y, x in product(xrange(l_y, h_y+1), xrange(l_x, h_x+1)):
+                pixel_center = Vector(x+0.5,y+0.5) * (1.0 / r)
+                if shape.contains(pixel_center):
+                    image.pixels[y][x] = grob.color.over(image.pixels[y][x])
+        else: shapes.extend(shape.split())
+    
