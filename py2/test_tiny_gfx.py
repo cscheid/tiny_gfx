@@ -3,6 +3,7 @@ import sys
 import cProfile
 
 def do_it():
+    f = open(sys.argv[1], 'w')
     i = Image(8, Color(0,0,0,1))
     
     grobs = [
@@ -22,7 +23,6 @@ def do_it():
     for grob in grobs:
         grob.draw(i)
 
-    f = open(sys.argv[1], 'w')
     i.write_ppm(f)
     f.close()
     
