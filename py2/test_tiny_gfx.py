@@ -1,27 +1,26 @@
-from tiny_gfx_reyes import *
+from tiny_gfx import *
 import sys
 import cProfile
 
 def do_it():
     i = Image(8, Color(0,0,0,1))
+    
     grobs = [
-        ShapeGrob(Triangle(Vector(0.2,0.1), Vector(0.9,0.3), Vector(0.1,0.4)),
+        ShapeGrob(Poly(Vector(0.2,0.1), Vector(0.9,0.3), Vector(0.1,0.4)),
                   Color(1,0,0,0.5)),
-        ShapeGrob(Triangle(Vector(0.5,0.2), Vector(1,0.4), Vector(0.2,0.7)),
+        ShapeGrob(Poly(Vector(0.5,0.2), Vector(1,0.4), Vector(0.2,0.7)),
                   Color(0,1,0,0.5)),
         ShapeGrob(Rectangle(Vector(0.1,0.7), Vector(0.6,0.8)),
                   Color(0,0.5,0.8,0.5)),
-        ShapeGrob(Triangle(Vector(-1, 0.6), Vector(0.2, 0.8),
-                           Vector(-2, 0.7)),
+        ShapeGrob(Poly(Vector(-1, 0.6), Vector(0.2, 0.8), Vector(-2, 0.7)),
                   Color(1,0,1,0.9)),
         ShapeGrob(Circle(Vector(0.5,0.9), 0.2), Color(1,1,0,1)),
-        # ShapeGrob(Circle(Vector(0.9,0.5), 0.2), Color(0,1,1,0.5)),
         TransformedShapeGrob(around(Vector(0.9, 0.5), scale(1.0, 0.5)),
                              Circle(Vector(0.9, 0.5), 0.2),
                              Color(0,1,1,0.5))
         ]
     for grob in grobs:
-        draw(i, grob)
+        grob.draw(i)
 
     f = open(sys.argv[1], 'w')
     i.write_ppm(f)

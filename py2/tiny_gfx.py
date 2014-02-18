@@ -2,6 +2,8 @@ import math
 import array
 import copy
 from itertools import product
+import random
+import sys
 
 class Vector:
     def __init__(self, x, y): self.x, self.y = x, y
@@ -10,15 +12,14 @@ class Vector:
     def __neg__(self): return Vector(-self.x, -self.y)
     def __mul__(self, k): return Vector(self.x * k, self.y * k)
     def cross(self, o): return self.x * o.y - self.y * o.x
-    def bounds(self): return AABox(self, self)
     def min(self, o): return Vector(min(self.x, o.x), min(self.y, o.y))
     def max(self, o): return Vector(max(self.x, o.x), max(self.y, o.y))
-    def length(self): return (self.x ** 2 + self.y ** 2) ** 0.5
     def __str__(self): return "v[%s, %s]" % (self.x, self.y)
     def __repr__(self): return "v[%s, %s]" % (self.x, self.y)
-
-# true if v3 is to the right side of the vector going from v1 to v2
-def is_cw(v1, v2, v3): return (v2 - v1).cross(v3 - v1) < 0
+    def union(*args):
+        return AABox(reduce(Vector.min, args), reduce(Vector.max, args))
+    # true if v3 is to the right side of the vector going from v1 to v2
+    def is_cw(v1, v2, v3): return (v2 - v1).cross(v3 - v1) < 0
 
 # axis-aligned box
 class AABox:
@@ -33,13 +34,6 @@ class AABox:
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
     def area(s): return (s.high.y - s.low.y) * (s.high.x - s.low.x)
 
-def union(b, *rest):
-    b = b.bounds()
-    for r in rest:
-        r = r.bounds()
-        b = AABox(b.low.min(r.low), b.high.max(r.high))
-    return b
-
 # a *convex* poly, in ccw order of vertices, with no repeating vertices
 # non-convex polys will break this
 class Poly:
@@ -48,7 +42,7 @@ class Poly:
         self.vs = list(ps[mn:]) + list(ps[:mn])
         self.bound = None
     def bounds(self):
-        if self.bound is None: self.bound = union(*self.vs)
+        if self.bound is None: self.bound = Vector.union(*self.vs)
         return self.bound
     def area(self):
         return sum(a.cross(b) for (a,b) in
@@ -56,7 +50,7 @@ class Poly:
     def slop(self): return self.bounds().area() / self.area()
     def contains(s, p):
         l = len(s.vs)
-        return not any(is_cw(s.vs[i], s.vs[(i+1) % l], p) for i in xrange(l))
+        return not any(s.vs[i].is_cw(s.vs[(i+1) % l], p) for i in xrange(l))
     def flip(self): return Poly(*list(Vector(v.y, v.x) for v in self.vs[::-1]))
     def split(self):
         def split_chain(a, v, key):
@@ -91,7 +85,7 @@ def Rectangle(v1, v2):
                 Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
                 Vector(min(v1.x, v2.x), max(v1.y, v2.y)))
 
-def Circle(center, radius, k = 30):
+def Circle(center=Vector(0,0), radius=1, k=64):
     d = math.pi * 2 / k
     lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
            for i in xrange(k)]
@@ -104,6 +98,7 @@ class Color:
         a = 1.0 - (1.0 - s.a) * (1.0 - o.a)
         u, v = s.a / a, 1 - s.a / a
         return Color(u * s.r + v * o.r, u * s.g + v * o.g, u * s.b + v * o.b, a)
+    def __mul__(s, k): return Color(s.r * k, s.g * k, s.b * k, s.a * k)
     def as_ppm(s):
         def byte(v): return int(v ** (1.0 / 2.2) * 255)
         return "%c%c%c" % (byte(s.r * s.a), byte(s.g * s.a), byte(s.b * s.a))
@@ -156,34 +151,57 @@ def translate(tx, ty): return Transform(1, 0, tx, 0, 1, ty)
 def scale(x, y): return Transform(x, 0, 0, 0, y, 0)
 def around(v, t): return translate(v.x, v.y) * t * translate(-v.x, -v.y)    
 
-# "Grob" for graphics object
-class ShapeGrob:
-    def __init__(self, shape, color):
-        self.shape, self.color = shape, color
-    def contains(self, p): return self.shape.contains(p)
+# "Grob" for graphics object, only supports solid colors for now
+class Grob:
+    def __init__(self, color):
+        self.color = color
     def color_at(self, point):
         if self.contains(point): return self.color
         else: return Color(0,0,0,0)
+with_ms = 0
+without_ms = 0
 
+class ShapeGrob(Grob):
+    def __init__(self, shape, color):
+        Grob.__init__(self, color)
+        self.shape = shape
+    def contains(self, p): return self.shape.contains(p)
+    def draw(self, image):
+        shapes, r = [self.shape], image.resolution
+        jitter = [Vector(x + random.random(),
+                         y + random.random()) * 0.25 * (1.0 / r)
+                  for (x, y) in product(xrange(6), repeat=2)]
+        # jitter = [Vector(0.5, 0.5)]
+        ib = image.bounds()
+        min_area = 4.0 / (image.resolution ** 2)
+        global with_ms, without_ms
+        while len(shapes):
+            shape = shapes.pop()
+            tb = shape.bounds()
+            if not tb.overlaps(ib): continue
+            if shape.slop() < 3 or tb.area() < min_area:
+                l_x = max(0, int(tb.low.x * r))
+                l_y = max(0, int(tb.low.y * r))
+                h_x = min(r-1, int(tb.high.x * r))
+                h_y = min(r-1, int(tb.high.y * r))
+                for y, x in product(xrange(l_y, h_y+1), xrange(l_x, h_x+1)):
+                    corner = Vector(x,y) * (1.0/r)
+                    s = sum(1 for x,y in product([0,1.0/r], repeat=2)
+                            if shape.contains(corner + Vector(x,y)))
+                    if s == 4:
+                        without_ms += 1
+                        image.pixels[y][x] = self.color.over(image.pixels[y][x])
+                    elif s > 0:
+                        with_ms += 1
+                        coverage = sum(1.0 for j in jitter
+                                       if shape.contains(corner+j)) / len(jitter)
+                        image.pixels[y][x] = (self.color * coverage).over(image.pixels[y][x])
+            else:
+                print >> sys.stderr, "SPLIT!"
+                shapes.extend(shape.split())
+        print >>sys.stderr, with_ms, without_ms
 def TransformedShapeGrob(xform, shape, color):
     c = copy.copy(shape)
     c.vs = [xform * v for v in shape.vs]
     return ShapeGrob(c, color)
 
-def draw(image, grob):
-    shapes, r = [grob.shape], image.resolution
-    ib = image.bounds()
-    min_area = 4.0 / (image.resolution ** 2)
-    while len(shapes):
-        shape = shapes.pop()
-        tb = shape.bounds()
-        if not tb.overlaps(ib): continue
-        if shape.slop() < 5 or tb.area() < min_area:
-            l_x, l_y = max(0, int(tb.low.x * r)), max(0, int(tb.low.y * r))
-            h_x, h_y = min(r-1, int(tb.high.x * r)), min(r-1, int(tb.high.y * r))
-            for y, x in product(xrange(l_y, h_y+1), xrange(l_x, h_x+1)):
-                pixel_center = Vector(x+0.5,y+0.5) * (1.0 / r)
-                if shape.contains(pixel_center):
-                    image.pixels[y][x] = grob.color.over(image.pixels[y][x])
-        else: shapes.extend(shape.split())
-    
