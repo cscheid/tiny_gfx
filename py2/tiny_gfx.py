@@ -6,6 +6,16 @@ import random
 import sys
 import time
 
+##############################################################################
+# Utility
+
+def cycled_pairs(lst):
+    for i in xrange(len(lst)):
+        yield lst[i], lst[(i + 1) % len(lst)]
+
+##############################################################################
+# Geometry
+
 class Vector:
     def __init__(self, *args):
         self.x, self.y = args
@@ -23,17 +33,15 @@ class Vector:
         return Vector(min(self.x, o.x), min(self.y, o.y))
     def max(self, o):
         return Vector(max(self.x, o.x), max(self.y, o.y))
+    def union(*args):
+        return AABox(reduce(Vector.min, args), reduce(Vector.max, args))
+    def length(self):
+        return (self.x * self.x + self.y * self.y) ** 0.5
     def __str__(self):
         return "v[%s, %s]" % (self.x, self.y)
     def __repr__(self):
         return "v[%s, %s]" % (self.x, self.y)
-    def union(*args):
-        return AABox(reduce(Vector.min, args), reduce(Vector.max, args))
-    # true if v3 is to the right side of the vector going from v1 to v2
-    def is_cw(v1, v2, v3):
-        return (v2 - v1).cross(v3 - v1) < 0
 
-# axis-aligned box
 class AABox:
     def __init__(self, p1, p2):
         self.low = p1.min(p2)
@@ -63,9 +71,8 @@ class HalfPlane:
         self.b /= l
         self.c /= l
 
-def cycled_pairs(lst):
-    for i in xrange(len(lst)):
-        yield lst[i], lst[(i + 1) % len(lst)]
+##############################################################################
+# Shapes
 
 # a *convex* poly, in ccw order of vertices, with no repeating vertices
 # non-convex polys will break this
@@ -140,6 +147,57 @@ class Poly:
         return "[ Poly %s ]" % len(self.vs) # " + ",".join(str(v) for v in self.vs) + "]"
     def transform(self, xform):
         return Poly(*(xform * v for v in self.vs))
+    def draw(self, image, color):
+        shape = self
+        t = time.time()
+        r = float(image.resolution)
+        jitter = [Vector(x + random.random(),
+                         y + random.random()) * 0.25 * (1.0 / r)
+                  for (x, y) in product(xrange(6), repeat=2)]
+        lj = len(jitter)
+        ib = image.bounds()
+        total_pixels = 0
+        tb = shape.bounds()
+        if not tb.overlaps(ib):
+            return
+        l_x = max(0, int(tb.low.x * r))
+        l_y = max(0, int(tb.low.y * r))
+        h_x = min(r-1, int(tb.high.x * r))
+        h_y = min(r-1, int(tb.high.y * r))
+        corners = list(product([0,1.0/r], repeat=2))
+        for y in xrange(l_y, int(h_y+1)):
+            x = l_x
+            while x <= h_x:
+                corner = Vector(x / r, y / r)
+                b = shape.signed_distance_bound(corner) * r
+                if b > 1.414:
+                    steps = int(b - 0.414)
+                    for x_ in xrange(x, min(x + steps, int(h_x+1))):
+                        image.pixels[y][x_].draw(color)
+                    x += steps
+                    total_pixels += min(x + steps, int(h_x+1)) - x
+                    continue
+                elif b < -1.414:
+                    steps = int(-b - 0.414)
+                    x += steps
+                    continue
+                s = 0
+                for x_, y_ in corners:
+                    if shape.contains(corner + Vector(x_, y_)):
+                        s += 1
+                if s == 4:
+                    total_pixels += 1
+                    image.pixels[y][x].draw(color)
+                elif s > 0:
+                    total_pixels += 1
+                    coverage = 0
+                    for j in jitter:
+                        if shape.contains(corner + j):
+                            coverage += 1.0
+                    image.pixels[y][x].draw(color.fainter(coverage / lj))
+                x += 1
+        elapsed = time.time() - t
+        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (shape, total_pixels, elapsed, elapsed/total_pixels)
 
 Triangle, Quad = Poly, Poly
 
@@ -181,6 +239,14 @@ def Circle(center=Vector(0,0), radius=1, k=256):
            for i in xrange(k)]
     return Poly(*lst)
 
+def LineSegment(v1, v2, thickness):
+    d = v2 - v1
+    d.x, d.y = -d.y, d.x
+    d *= thickness / d.length() / 2
+    return Quad(v1 + d, v1 - d, v2 - d, v2 + d)
+    
+##############################################################################
+
 class Color:
     def __init__(self, r, g, b, a=1):
         self.r = r
@@ -210,8 +276,8 @@ class Color:
         return Color(u * self.r + v * o.r,
                      u * self.g + v * o.g,
                      u * self.b + v * o.b, a)
-    def __mul__(self, k):
-        return Color(self.r * k, self.g * k, self.b * k, self.a * k)
+    def fainter(self, k):
+        return Color(self.r, self.g, self.b, self.a * k)
     def as_ppm(self):
         def byte(v):
             return int(v ** (1.0 / 2.2) * 255)
@@ -223,7 +289,7 @@ class Color:
         
 class Image:
     def __init__(self, resolution, bg=Color(0,0,0,0)):
-        self.resolution = 2 ** resolution
+        self.resolution = resolution
         self.pixels = []
         for i in xrange(self.resolution):
             lst = []
@@ -242,6 +308,7 @@ class Image:
         for y, x in product(xrange(n-1,-1,-1), xrange(n)):
             out.write(self.pixels[y][x].as_ppm())
 
+################################################################################
 # affine 2D transforms, encoded by a matrix
 # ( m11 m12 tx )
 # ( m21 m22 ty )
@@ -285,6 +352,8 @@ def scale(x, y):
 def around(v, t):
     return translate(v.x, v.y) * t * translate(-v.x, -v.y)
 
+################################################################################
+
 # "Grob" for graphics object, only supports solid colors for now
 class Grob:
     def __init__(self, color):
@@ -302,57 +371,7 @@ class ShapeGrob(Grob):
     def contains(self, p):
         return self.shape.contains(p)
     def draw(self, image):
-        t = time.time()
-        r = float(image.resolution)
-        jitter = [Vector(x + random.random(),
-                         y + random.random()) * 0.25 * (1.0 / r)
-                  for (x, y) in product(xrange(6), repeat=2)]
-        lj = len(jitter)
-        ib = image.bounds()
-        with_ms = 0
-        total_pixels = 0
-        shape = self.shape
-        tb = shape.bounds()
-        if not tb.overlaps(ib):
-            return
-        l_x = max(0, int(tb.low.x * r))
-        l_y = max(0, int(tb.low.y * r))
-        h_x = min(r-1, int(tb.high.x * r))
-        h_y = min(r-1, int(tb.high.y * r))
-        corners = list(product([0,1.0/r], repeat=2))
-        for y in xrange(l_y, int(h_y+1)):
-            x = l_x
-            while x <= h_x:
-                corner = Vector(x / r, y / r)
-                b = shape.signed_distance_bound(corner) * r
-                if b > 1.414:
-                    steps = int(b - 0.414)
-                    for x_ in xrange(x, min(x + steps, int(h_x+1))):
-                        image.pixels[y][x_].draw(self.color)
-                    x += steps
-                    continue
-                elif b < -1.414:
-                    steps = int(-b - 0.414)
-                    x += steps
-                    continue
-                s = 0
-                for x_, y_ in corners:
-                    if shape.contains(corner + Vector(x_, y_)):
-                        s += 1
-                if s == 4:
-                    total_pixels += 1
-                    image.pixels[y][x].draw(self.color)
-                elif s > 0:
-                    total_pixels += 1
-                    with_ms += 1
-                    coverage = 0
-                    for j in jitter:
-                        if shape.contains(corner + j):
-                            coverage += 1.0
-                    image.pixels[y][x].draw(self.color * (coverage / lj))
-                x += 1
-        elapsed = time.time() - t
-        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (shape, total_pixels, elapsed, elapsed/total_pixels)
+        self.shape.draw(image, self.color)
 
 def TransformedShapeGrob(xform, shape, color):
     xform_shape = shape.transform(xform)
