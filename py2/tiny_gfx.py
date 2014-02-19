@@ -7,13 +7,6 @@ import sys
 import time
 
 ##############################################################################
-# Utility
-
-def cycled_pairs(lst):
-    for i in xrange(len(lst)):
-        yield lst[i], lst[(i + 1) % len(lst)]
-
-##############################################################################
 # Geometry
 
 class Vector:
@@ -58,8 +51,6 @@ class AABox:
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
-    def area(self):
-        return (self.high.y - self.low.y) * (self.high.x - self.low.x)
 
 class HalfPlane:
     def __init__(self, p1, p2):
@@ -80,19 +71,13 @@ class Poly:
     def __init__(self, *ps):
         mn = min(enumerate(ps), key=lambda (i,v): (v.y, v.x))[0]
         self.vs = list(ps[mn:]) + list(ps[:mn])
-        self.bound = None
-        self.bound = self.bounds()
-        self.half_planes = self.half_plane_equations()
-        self.sz = range(1, len(self.vs)) # len(self.vs)
+        self.bound = Vector.union(*self.vs)
+        self.half_planes = []
+        for i in xrange(len(self.vs)):
+            h = HalfPlane(self.vs[i], self.vs[(i+1) % len(self.vs)])
+            self.half_planes.append(h)
     def bounds(self):
-        if self.bound is None:
-            self.bound = Vector.union(*self.vs)
         return self.bound
-    def area(self):
-        return sum(a.cross(b) for (a,b) in
-                   zip(self.vs, self.vs[1:] + [self.vs[0]])) / 2.0
-    def half_plane_equations(self):
-        return [HalfPlane(p1, p2) for p1, p2 in cycled_pairs(self.vs)]
     def signed_distance_bound(self, p):
         plane = self.half_planes[0]
         min_inside = 1e30
@@ -105,14 +90,8 @@ class Poly:
                 min_inside = d
         return max_outside if max_outside <> -1e30 else min_inside
     def contains(self, p):
-        plane = self.half_planes[0]
-        # plane-point tests are inlined because this is the hot path
-        if plane.a * p.x + plane.b * p.y + plane.c < 0:
-            return False
-        for i in self.sz:
-            plane = self.half_planes[i]
+        for plane in self.half_planes:
             if plane.a * p.x + plane.b * p.y + plane.c < 0:
-                self.half_planes[i-1], self.half_planes[i] = plane, self.half_planes[i-1]
                 return False
         return True
     def flip(self):
@@ -144,21 +123,21 @@ class Poly:
         else:
             return list(x.flip() for x in self.flip().split())
     def __str__(self):
-        return "[ Poly %s ]" % len(self.vs) # " + ",".join(str(v) for v in self.vs) + "]"
+        return "[ Poly %s ]" % len(self.vs)
     def transform(self, xform):
         return Poly(*(xform * v for v in self.vs))
     def draw(self, image, color):
         shape = self
         t = time.time()
         r = float(image.resolution)
-        jitter = [Vector(x + random.random(),
-                         y + random.random()) * 0.25 * (1.0 / r)
-                  for (x, y) in product(xrange(6), repeat=2)]
+        super_sampling = 6
+        jitter = [Vector((x + random.random()) / super_sampling / r,
+                         (y + random.random()) / super_sampling / r)
+                  for (x, y) in product(xrange(super_sampling), repeat=2)]
         lj = len(jitter)
-        ib = image.bounds()
         total_pixels = 0
         tb = shape.bounds()
-        if not tb.overlaps(ib):
+        if not tb.overlaps(image.bounds()):
             return
         l_x = max(0, int(tb.low.x * r))
         l_y = max(0, int(tb.low.y * r))
@@ -206,9 +185,6 @@ class HierarchicalPoly(Poly):
         Poly.__init__(self, *ps)
         self.children = None
         self.split_until_simple()
-    def area(self):
-        return sum(a.cross(b) for (a,b) in
-                   zip(self.vs, self.vs[1:] + [self.vs[0]])) / 2.0
     def contains(self, p):
         if not self.bound.contains(p):
             return False
@@ -216,6 +192,8 @@ class HierarchicalPoly(Poly):
             return Poly.contains(self, p)
         return self.children[0].contains(p) or \
                self.children[1].contains(p)
+    def signed_distance_bound(self, p):
+        return 0
     def split_until_simple(self, max_points=5):
         if len(self.vs) <= max_points:
             return
@@ -237,7 +215,7 @@ def Circle(center=Vector(0,0), radius=1, k=256):
     d = math.pi * 2 / k
     lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
            for i in xrange(k)]
-    return Poly(*lst)
+    return HierarchicalPoly(*lst)
 
 def LineSegment(v1, v2, thickness):
     d = v2 - v1
@@ -314,6 +292,7 @@ class Image:
 # ( m21 m22 ty )
 # (  0   0   1 )
 # vectors are to be interpreted as (vx vy 1)
+
 class Transform:
     def __init__(self, m11, m12, tx, m21, m22, ty):
         self.m = [[m11, m12, tx],
@@ -353,21 +332,11 @@ def around(v, t):
     return translate(v.x, v.y) * t * translate(-v.x, -v.y)
 
 ################################################################################
-
-# "Grob" for graphics object, only supports solid colors for now
-class Grob:
-    def __init__(self, color):
-        self.color = color
-    def color_at(self, point):
-        if self.contains(point):
-            return self.color
-        else:
-            return Color(0,0,0,0)
         
-class ShapeGrob(Grob):
+class ShapeGrob:
     def __init__(self, shape, color):
-        Grob.__init__(self, color)
         self.shape = shape
+        self.color = color
     def contains(self, p):
         return self.shape.contains(p)
     def draw(self, image):
@@ -376,6 +345,3 @@ class ShapeGrob(Grob):
 def TransformedShapeGrob(xform, shape, color):
     xform_shape = shape.transform(xform)
     return ShapeGrob(xform_shape, color)
-
-    c = copy.copy(shape)
-    c.vs = [xform * v for v in shape.vs]
