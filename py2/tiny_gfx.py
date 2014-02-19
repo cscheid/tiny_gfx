@@ -44,21 +44,24 @@ class AABox:
         return self
     def size(self):
         return self.high - self.low
-    def contains(s, p):
-        return (s.low.x <= p.x <= s.high.x and s.low.y <= p.y <= s.high.y)
+    def contains(self, p):
+        return self.low.x <= p.x <= self.high.x and \
+               self.low.y <= p.y <= self.high.y
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
-    def area(s):
-        return (s.high.y - s.low.y) * (s.high.x - s.low.x)
+    def area(self):
+        return (self.high.y - self.low.y) * (self.high.x - self.low.x)
 
 class HalfPlane:
     def __init__(self, p1, p2):
         self.a = -p2.y + p1.y
         self.b = p2.x - p1.x
+        l = (self.a * self.a + self.b * self.b) ** 0.5
         self.c = -self.b * p1.y - self.a * p1.x
-    def test(self, p):
-        return self.a * p.x + self.b * p.y + self.c < 0
+        self.a /= l
+        self.b /= l
+        self.c /= l
 
 def cycled_pairs(lst):
     for i in xrange(len(lst)):
@@ -73,6 +76,7 @@ class Poly:
         self.bound = None
         self.bound = self.bounds()
         self.half_planes = self.half_plane_equations()
+        self.sz = range(1, len(self.vs)) # len(self.vs)
     def bounds(self):
         if self.bound is None:
             self.bound = Vector.union(*self.vs)
@@ -80,16 +84,28 @@ class Poly:
     def area(self):
         return sum(a.cross(b) for (a,b) in
                    zip(self.vs, self.vs[1:] + [self.vs[0]])) / 2.0
-    def slop(self):
-        return self.bounds().area() / self.area()
     def half_plane_equations(self):
         return [HalfPlane(p1, p2) for p1, p2 in cycled_pairs(self.vs)]
+    def signed_distance_bound(self, p):
+        plane = self.half_planes[0]
+        min_inside = 1e30
+        max_outside = -1e30
+        for plane in self.half_planes:
+            d = plane.a * p.x + plane.b * p.y + plane.c
+            if d <= 0 and d > max_outside:
+                max_outside = d
+            if d >= 0 and d < min_inside:
+                min_inside = d
+        return max_outside if max_outside <> -1e30 else min_inside
     def contains(self, p):
-        for i in xrange(len(self.half_planes)):
+        plane = self.half_planes[0]
+        # plane-point tests are inlined because this is the hot path
+        if plane.a * p.x + plane.b * p.y + plane.c < 0:
+            return False
+        for i in self.sz:
             plane = self.half_planes[i]
-            if plane.test(p):
-                if i > 0:
-                    self.half_planes[i-1], self.half_planes[i] = plane, self.half_planes[i-1]
+            if plane.a * p.x + plane.b * p.y + plane.c < 0:
+                self.half_planes[i-1], self.half_planes[i] = plane, self.half_planes[i-1]
                 return False
         return True
     def flip(self):
@@ -135,8 +151,6 @@ class HierarchicalPoly(Poly):
     def area(self):
         return sum(a.cross(b) for (a,b) in
                    zip(self.vs, self.vs[1:] + [self.vs[0]])) / 2.0
-    def slop(self):
-        return self.bounds().area() / self.area()
     def contains(self, p):
         if not self.bound.contains(p):
             return False
@@ -161,11 +175,11 @@ def Rectangle(v1, v2):
                 Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
                 Vector(min(v1.x, v2.x), max(v1.y, v2.y)))
 
-def Circle(center=Vector(0,0), radius=1, k=1024):
+def Circle(center=Vector(0,0), radius=1, k=256):
     d = math.pi * 2 / k
     lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
            for i in xrange(k)]
-    return HierarchicalPoly(*lst)
+    return Poly(*lst)
 
 class Color:
     def __init__(self, r, g, b, a=1):
@@ -173,24 +187,49 @@ class Color:
         self.g = g
         self.b = b
         self.a = a
-    def over(s, o):
-        if s.a == o.a == 0.0: return s
-        a = 1.0 - (1.0 - s.a) * (1.0 - o.a)
-        u = s.a / a
+    def draw(self, o):
+        if self.a == o.a == 0.0:
+            return
+        if o.a == 1.0:
+            self.r = o.r
+            self.g = o.g
+            self.b = o.b
+            self.a = 1
+        else:
+            u = 1.0 - o.a
+            self.r = u * self.r + o.a * o.r
+            self.g = u * self.g + o.a * o.g
+            self.b = u * self.b + o.a * o.b
+            self.a = 1.0 - (1.0 - self.a) * (1.0 - o.a)
+    def over(self, o):
+        if self.a == o.a == 0.0:
+            return self
+        a = 1.0 - (1.0 - self.a) * (1.0 - o.a)
+        u = self.a / a
         v = 1 - u
-        return Color(u * s.r + v * o.r, u * s.g + v * o.g, u * s.b + v * o.b, a)
-    def __mul__(s, k):
-        return Color(s.r * k, s.g * k, s.b * k, s.a * k)
-    def as_ppm(s):
+        return Color(u * self.r + v * o.r,
+                     u * self.g + v * o.g,
+                     u * self.b + v * o.b, a)
+    def __mul__(self, k):
+        return Color(self.r * k, self.g * k, self.b * k, self.a * k)
+    def as_ppm(self):
         def byte(v):
             return int(v ** (1.0 / 2.2) * 255)
-        return "%c%c%c" % (byte(s.r * s.a), byte(s.g * s.a), byte(s.b * s.a))
+        return "%c%c%c" % (byte(self.r * self.a),
+                           byte(self.g * self.a),
+                           byte(self.b * self.a))
+    def __str__(self):
+        return "c[%.3f %.3f %.3f %.3f]" % (self.r, self.g, self.b, self.a)
         
 class Image:
     def __init__(self, resolution, bg=Color(0,0,0,0)):
         self.resolution = 2 ** resolution
-        self.pixels = [[bg for i in xrange(self.resolution)]
-                       for j in xrange(self.resolution)]
+        self.pixels = []
+        for i in xrange(self.resolution):
+            lst = []
+            for j in xrange(self.resolution):
+                lst.append(copy.copy(bg))
+            self.pixels.append(lst)
     def bounds(self):
         return AABox(Vector(0,0), Vector(1,1))
     def __getitem__(self, a):
@@ -210,7 +249,9 @@ class Image:
 # vectors are to be interpreted as (vx vy 1)
 class Transform:
     def __init__(self, m11, m12, tx, m21, m22, ty):
-        self.m = [[m11, m12, tx], [m21, m22, ty], [0, 0, 1]]
+        self.m = [[m11, m12, tx],
+                  [m21, m22, ty],
+                  [0, 0, 1]]
     def __mul__(self, other): # ugly
         if isinstance(other, Transform):
             t = [[0] * 3 for i in xrange(3)]
@@ -258,17 +299,18 @@ class ShapeGrob(Grob):
     def __init__(self, shape, color):
         Grob.__init__(self, color)
         self.shape = shape
-    def contains(self, p): return self.shape.contains(p)
+    def contains(self, p):
+        return self.shape.contains(p)
     def draw(self, image):
         t = time.time()
         r = float(image.resolution)
         jitter = [Vector(x + random.random(),
                          y + random.random()) * 0.25 * (1.0 / r)
                   for (x, y) in product(xrange(6), repeat=2)]
-        # jitter = [Vector(0.5, 0.5)]
+        lj = len(jitter)
         ib = image.bounds()
         with_ms = 0
-        without_ms = 0
+        total_pixels = 0
         shape = self.shape
         tb = shape.bounds()
         if not tb.overlaps(ib):
@@ -277,20 +319,40 @@ class ShapeGrob(Grob):
         l_y = max(0, int(tb.low.y * r))
         h_x = min(r-1, int(tb.high.x * r))
         h_y = min(r-1, int(tb.high.y * r))
-        for y, x in product(xrange(l_y, h_y+1), xrange(l_x, h_x+1)):
-            corner = Vector(x,y) * (1.0/r)
-            s = sum(1 for x,y in product([0,1.0/r], repeat=2)
-                    if shape.contains(corner + Vector(x,y)))
-            if s == 4:
-                without_ms += 1
-                image.pixels[y][x] = self.color.over(image.pixels[y][x])
-            elif s > 0:
-                with_ms += 1
-                coverage = sum(1.0 for j in jitter
-                               if shape.contains(corner+j)) / len(jitter)
-                image.pixels[y][x] = (self.color * coverage).over(image.pixels[y][x])
+        corners = list(product([0,1.0/r], repeat=2))
+        for y in xrange(l_y, int(h_y+1)):
+            x = l_x
+            while x <= h_x:
+                corner = Vector(x / r, y / r)
+                b = shape.signed_distance_bound(corner) * r
+                if b > 1.414:
+                    steps = int(b - 0.414)
+                    for x_ in xrange(x, min(x + steps, int(h_x+1))):
+                        image.pixels[y][x_].draw(self.color)
+                    x += steps
+                    continue
+                elif b < -1.414:
+                    steps = int(-b - 0.414)
+                    x += steps
+                    continue
+                s = 0
+                for x_, y_ in corners:
+                    if shape.contains(corner + Vector(x_, y_)):
+                        s += 1
+                if s == 4:
+                    total_pixels += 1
+                    image.pixels[y][x].draw(self.color)
+                elif s > 0:
+                    total_pixels += 1
+                    with_ms += 1
+                    coverage = 0
+                    for j in jitter:
+                        if shape.contains(corner + j):
+                            coverage += 1.0
+                    image.pixels[y][x].draw(self.color * (coverage / lj))
+                x += 1
         elapsed = time.time() - t
-        print >>sys.stderr, shape, with_ms, without_ms, elapsed, l_x, h_x, l_y, h_y
+        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (shape, total_pixels, elapsed, elapsed/total_pixels)
 
 def TransformedShapeGrob(xform, shape, color):
     xform_shape = shape.transform(xform)
