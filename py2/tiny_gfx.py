@@ -65,6 +65,13 @@ class HalfPlane:
 ##############################################################################
 # Shapes
 
+# class Shape:
+#     def signed_distance_bound(self, p): pass
+#     self.bound
+#     def contains(self, p): pass
+#     def transform(self, transform): pass
+#     def draw(self, image, color): pass
+
 # a *convex* poly, in ccw order of vertices, with no repeating vertices
 # non-convex polys will break this
 class Poly:
@@ -76,8 +83,6 @@ class Poly:
         for i in xrange(len(self.vs)):
             h = HalfPlane(self.vs[i], self.vs[(i+1) % len(self.vs)])
             self.half_planes.append(h)
-    def bounds(self):
-        return self.bound
     def signed_distance_bound(self, p):
         plane = self.half_planes[0]
         min_inside = 1e30
@@ -109,13 +114,13 @@ class Poly:
                 v.x = u * a[lo].x + (1-u) * a[lo-1].x
                 a.insert(lo, v)
             return lo
-        sz = self.bounds().size()
+        sz = self.bound.size()
         if sz.y >= sz.x:
             max_index_y = max(enumerate(self.vs),
                               key=lambda (i,v): (v.y, v.x))[0]
             upward = self.vs[0:max_index_y+1]
             downward = self.vs[max_index_y:] + [self.vs[0]]
-            mid_y = self.bounds().midpoint().y
+            mid_y = self.bound.midpoint().y
             i_u = split_chain(upward, Vector(None, mid_y), lambda k: k.y)
             i_d = split_chain(downward, Vector(None, mid_y), lambda k: -k.y)
             return [Poly(*(upward[:i_u+1] + downward[i_d:-1])),
@@ -127,7 +132,6 @@ class Poly:
     def transform(self, xform):
         return Poly(*(xform * v for v in self.vs))
     def draw(self, image, color):
-        shape = self
         t = time.time()
         r = float(image.resolution)
         super_sampling = 6
@@ -136,19 +140,19 @@ class Poly:
                   for (x, y) in product(xrange(super_sampling), repeat=2)]
         lj = len(jitter)
         total_pixels = 0
-        tb = shape.bounds()
+        tb = self.bound
         if not tb.overlaps(image.bounds()):
             return
         l_x = max(0, int(tb.low.x * r))
         l_y = max(0, int(tb.low.y * r))
         h_x = min(r-1, int(tb.high.x * r))
         h_y = min(r-1, int(tb.high.y * r))
-        corners = list(product([0,1.0/r], repeat=2))
+        corners = [(0, 0), (1.0/r, 0), (0, 1.0/r), (1.0/r, 1.0/r)]
         for y in xrange(l_y, int(h_y+1)):
             x = l_x
             while x <= h_x:
                 corner = Vector(x / r, y / r)
-                b = shape.signed_distance_bound(corner) * r
+                b = self.signed_distance_bound(corner) * r
                 if b > 1.414:
                     steps = int(b - 0.414)
                     for x_ in xrange(x, min(x + steps, int(h_x+1))):
@@ -162,7 +166,7 @@ class Poly:
                     continue
                 s = 0
                 for x_, y_ in corners:
-                    if shape.contains(corner + Vector(x_, y_)):
+                    if self.contains(corner + Vector(x_, y_)):
                         s += 1
                 if s == 4:
                     total_pixels += 1
@@ -171,12 +175,12 @@ class Poly:
                     total_pixels += 1
                     coverage = 0
                     for j in jitter:
-                        if shape.contains(corner + j):
+                        if self.contains(corner + j):
                             coverage += 1.0
                     image.pixels[y][x].draw(color.fainter(coverage / lj))
                 x += 1
         elapsed = time.time() - t
-        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (shape, total_pixels, elapsed, elapsed/total_pixels)
+        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/total_pixels)
 
 Triangle, Quad = Poly, Poly
 
@@ -215,7 +219,7 @@ def Circle(center=Vector(0,0), radius=1, k=256):
     d = math.pi * 2 / k
     lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
            for i in xrange(k)]
-    return HierarchicalPoly(*lst)
+    return Poly(*lst)
 
 def LineSegment(v1, v2, thickness):
     d = v2 - v1
@@ -265,7 +269,7 @@ class Color:
     def __str__(self):
         return "c[%.3f %.3f %.3f %.3f]" % (self.r, self.g, self.b, self.a)
         
-class Image:
+class PPMImage:
     def __init__(self, resolution, bg=Color(0,0,0,0)):
         self.resolution = resolution
         self.pixels = []
@@ -286,6 +290,26 @@ class Image:
         for y, x in product(xrange(n-1,-1,-1), xrange(n)):
             out.write(self.pixels[y][x].as_ppm())
 
+class Scene:
+    def __init__(self, nodes=[], transform=None):
+        if transform is None:
+            transform = identity()
+        self.transform = transform
+        self.nodes = nodes
+    def add(self, node):
+        self.nodes.append(node)
+    def draw(self, image):
+        for grob in self.traverse(identity()):
+            grob.draw(image)
+    def traverse(self, xform):
+        this_xform = xform * self.transform
+        for node in self.nodes:
+            if isinstance(node, Scene):
+                for n in node.traverse(this_xform):
+                    yield n
+            elif isinstance(node, ShapeGrob):
+                yield node.transform(this_xform)
+        
 ################################################################################
 # affine 2D transforms, encoded by a matrix
 # ( m11 m12 tx )
@@ -318,8 +342,13 @@ class Transform:
     def __str__(self):
         return str(self.m)
 
+def identity():
+    return Transform(1, 0, 0, 0, 1, 0)
+
 def rotate(theta):
-    s, c = math.sin(theta), math.cos(theta)
+    theta = math.radians(theta)
+    s = math.sin(theta)
+    c = math.cos(theta)
     return Transform(c, -s, 0, s, c, 0)
 
 def translate(tx, ty):
@@ -341,6 +370,8 @@ class ShapeGrob:
         return self.shape.contains(p)
     def draw(self, image):
         self.shape.draw(image, self.color)
+    def transform(self, transform):
+        return ShapeGrob(self.shape.transform(transform), self.color)
 
 def TransformedShapeGrob(xform, shape, color):
     xform_shape = shape.transform(xform)
