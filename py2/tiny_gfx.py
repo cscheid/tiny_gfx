@@ -16,9 +16,6 @@ def quadratic(a, b, c):
     else:
         return (2 * c) / (-b + d), (-b + d) / (2 * a)
 
-##############################################################################
-# Geometry
-
 class Vector:
     def __init__(self, *args):
         self.x, self.y = args
@@ -26,8 +23,6 @@ class Vector:
         return Vector(self.x + o.x, self.y + o.y)
     def __sub__(self, o):
         return Vector(self.x - o.x, self.y - o.y)
-    def __neg__(self):
-        return Vector(-self.x, -self.y)
     def __mul__(self, k):
         return Vector(self.x * k, self.y * k)
     def dot(self, o):
@@ -42,10 +37,6 @@ class Vector:
         return AABox(reduce(Vector.min, args), reduce(Vector.max, args))
     def length(self):
         return (self.x * self.x + self.y * self.y) ** 0.5
-    def __str__(self):
-        return "v[%s, %s]" % (self.x, self.y)
-    def __repr__(self):
-        return "v[%s, %s]" % (self.x, self.y)
 
 class AABox:
     def __init__(self, p1, p2):
@@ -74,9 +65,6 @@ class HalfPlane:
         self.c = (-self.b * p1.y - self.a * p1.x) / l
         self.a /= l
         self.b /= l
-
-##############################################################################
-# Shapes
 
 class Shape:
     def draw(self, image, color, super_sampling = 6):
@@ -129,9 +117,7 @@ class Shape:
         elapsed = time.time() - t
         print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/(total_pixels+1))
 
-# a *convex* poly, in ccw order of vertices, with no repeating vertices
-# non-convex polys will break this
-class Poly(Shape):
+class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
     def __init__(self, *ps):
         mn = min(enumerate(ps), key=lambda (i,v): (v.y, v.x))[0]
         self.vs = list(ps[mn:]) + list(ps[:mn])
@@ -156,65 +142,10 @@ class Poly(Shape):
             if plane.a * p.x + plane.b * p.y + plane.c < 0:
                 return False
         return True
-    def flip(self):
-        return Poly(*list(Vector(v.y, v.x) for v in self.vs[::-1]))
-    def split(self):
-        def split_chain(a, v, key):
-            # based on http://hg.python.org/cpython/file/2.7/Lib/bisect.py
-            lo, hi, kv = 0, len(a), key(v)
-            while lo < hi:
-                mid = (lo+hi)//2
-                if key(a[mid]) < kv: lo = mid+1
-                else: hi = mid
-            if key(a[lo]) <> kv:
-                u = (v.y - a[lo-1].y) / (a[lo].y - a[lo-1].y)
-                v.x = u * a[lo].x + (1-u) * a[lo-1].x
-                a.insert(lo, v)
-            return lo
-        sz = self.bound.size()
-        if sz.y >= sz.x:
-            max_index_y = max(enumerate(self.vs),
-                              key=lambda (i,v): (v.y, v.x))[0]
-            upward = self.vs[0:max_index_y+1]
-            downward = self.vs[max_index_y:] + [self.vs[0]]
-            mid_y = self.bound.midpoint().y
-            i_u = split_chain(upward, Vector(None, mid_y), lambda k: k.y)
-            i_d = split_chain(downward, Vector(None, mid_y), lambda k: -k.y)
-            return [Poly(*(upward[:i_u+1] + downward[i_d:-1])),
-                    Poly(*(upward[i_u:-1] + downward[:i_d+1]))]
-        else:
-            return list(x.flip() for x in self.flip().split())
-    def __str__(self):
-        return "[ Poly %s ]" % len(self.vs)
     def transform(self, xform):
         return Poly(*(xform * v for v in self.vs))
 
 Triangle, Quad = Poly, Poly
-
-class HierarchicalPoly(Poly):
-    def __init__(self, *ps):
-        Poly.__init__(self, *ps)
-        self.children = None
-        self.split_until_simple()
-    def contains(self, p):
-        if not self.bound.contains(p):
-            return False
-        if self.children is None:
-            return Poly.contains(self, p)
-        return self.children[0].contains(p) or \
-               self.children[1].contains(p)
-    def signed_distance_bound(self, p):
-        return 0
-    def split_until_simple(self, max_points=5):
-        if len(self.vs) <= max_points:
-            return
-        poly_children = self.split()
-        self.children = [HierarchicalPoly(*poly_children[0].vs),
-                         HierarchicalPoly(*poly_children[1].vs)]
-    def __str__(self):
-        return "HierarchicalPoly"
-    def transform(self, xform):
-        return HierarchicalPoly(*(xform * v for v in self.vs))
 
 def Rectangle(v1, v2):
     return Quad(Vector(min(v1.x, v2.x), min(v1.y, v2.y)),
@@ -230,7 +161,6 @@ class Ellipse(Shape):
         self.d = d
         self.e = e
         self.f = f
-        # kind of a terrible hack, but I'm running out of LOCs
         t = Transform(2 * a, c, 0, c, 2 * b, 0)
         self.center = t.inverse() * Vector(-d, -e)
         l1, l0 = quadratic(1, 2 * (-a - b), 4 * a * b - c * c)
@@ -242,7 +172,7 @@ class Ellipse(Shape):
                                   self.center + axes[0] + axes[1])
     def value(self, p):
         return self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
-            + self.d * p.x + self.e * p.y + self.f
+               + self.d * p.x + self.e * p.y + self.f
     def contains(self, p):
         return self.value(p) < 0
     def transform(self, transform):
@@ -331,50 +261,33 @@ class Subtraction(CSG):
         b2 = -self.v2.signed_distance_bound(p)
         return b1 if b1 < b2 else b2
 
-##############################################################################
-
 class Color:
-    def __init__(self, r, g, b, a=1):
-        self.r = r
-        self.g = g
-        self.b = b
+    def __init__(self, r=0, g=0, b=0, a=1, rgb=None):
+        self.rgb = rgb or (r, g, b)
         self.a = a
     def draw(self, o):
         if self.a == o.a == 0.0:
             return
         if o.a == 1.0:
-            self.r = o.r
-            self.g = o.g
-            self.b = o.b
+            self.rgb = o.rgb
             self.a = 1
         else:
             u = 1.0 - o.a
-            self.r = u * self.r + o.a * o.r
-            self.g = u * self.g + o.a * o.g
-            self.b = u * self.b + o.a * o.b
+            self.rgb = (u * self.rgb[0] + o.a * o.rgb[0],
+                        u * self.rgb[1] + o.a * o.rgb[1],
+                        u * self.rgb[2] + o.a * o.rgb[2])
             self.a = 1.0 - (1.0 - self.a) * (1.0 - o.a)
-    def over(self, o):
-        if self.a == o.a == 0.0:
-            return self
-        a = 1.0 - (1.0 - self.a) * (1.0 - o.a)
-        u = self.a / a
-        v = 1 - u
-        return Color(u * self.r + v * o.r,
-                     u * self.g + v * o.g,
-                     u * self.b + v * o.b, a)
     def fainter(self, k):
-        return Color(self.r, self.g, self.b, self.a * k)
+        return Color(rgb=self.rgb, a=self.a*k)
     def as_ppm(self):
         def byte(v):
             return int(v ** (1.0 / 2.2) * 255)
-        return "%c%c%c" % (byte(self.r * self.a),
-                           byte(self.g * self.a),
-                           byte(self.b * self.a))
-    def __str__(self):
-        return "c[%.3f %.3f %.3f %.3f]" % (self.r, self.g, self.b, self.a)
-        
+        return "%c%c%c" % (byte(self.rgb[0] * self.a),
+                           byte(self.rgb[1] * self.a),
+                           byte(self.rgb[2] * self.a))
+
 class PPMImage:
-    def __init__(self, resolution, bg=Color(0,0,0,0)):
+    def __init__(self, resolution, bg=Color()):
         self.resolution = resolution
         self.pixels = []
         for i in xrange(self.resolution):
@@ -416,13 +329,6 @@ class Scene:
             elif isinstance(node, Grob):
                 yield node.transform(this_xform)
         
-################################################################################
-# affine 2D transforms, encoded by a 3x3 matrix in homogeneous coordinates
-# ( m11 m12 tx )
-# ( m21 m22 ty )
-# (  0   0   1 )
-# vectors are to be interpreted as (vx vy 1)
-
 class Transform:
     def __init__(self, m11, m12, tx, m21, m22, ty):
         self.m = [[m11, m12, tx],
@@ -445,8 +351,6 @@ class Transform:
         d = 1.0 / self.det()
         return Transform(d * self.m[1][1], -d * self.m[0][1], -self.m[0][2],
                          -d * self.m[1][0], d * self.m[0][0], -self.m[1][2])
-    def __str__(self):
-        return str(self.m)
     def eigv(self): # power iteration, ignores translation, assumes SPD
         a = Vector(random.random(), random.random())
         last = Vector(0,0)
@@ -457,10 +361,6 @@ class Transform:
             a = t * a
             a = a * (1.0 / a.length())
         return a, Vector(-a.y, a.x)
-    def __str__(self):
-        return "(%.3f %.3f %.3f)\n(%.3f %.3f %.3f)" % tuple(self.m[0] + self.m[1])
-    def __repr__(self):
-        return "(%.3f %.3f %.3f)\n(%.3f %.3f %.3f)" % tuple(self.m[0] + self.m[1])
         
 def identity():
     return Transform(1, 0, 0, 0, 1, 0)
@@ -478,8 +378,6 @@ def scale(x, y):
 
 def around(v, t):
     return translate(v.x, v.y) * t * translate(-v.x, -v.y)
-
-################################################################################
         
 class Grob:
     def __init__(self, shape, color):
