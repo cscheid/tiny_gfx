@@ -1,7 +1,8 @@
-from tiny_gfx import *
+from rasterizer import *
 import sys
 import cProfile
 import random
+import math
 
 def do_it():
     f = open(sys.argv[1], 'w')
