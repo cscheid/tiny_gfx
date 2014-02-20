@@ -1,13 +1,7 @@
 import math
-import array
 import copy
 from itertools import product
 import random
-import sys
-import time
-
-def sgn(x):
-    return 0 if x == 0 else x / abs(x)
 
 def quadratic(a, b, c):
     d = (b * b - 4 * a * c) ** 0.5
@@ -27,8 +21,6 @@ class Vector:
         return Vector(self.x * k, self.y * k)
     def dot(self, o):
         return self.x * o.x + self.y * o.y
-    def cross(self, o):
-        return self.x * o.y - self.y * o.x
     def min(self, o):
         return Vector(min(self.x, o.x), min(self.y, o.y))
     def max(self, o):
@@ -54,21 +46,18 @@ class AABox:
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
     def intersection(self, other):
         return AABox(self.low.max(other.low), self.high.min(other.high))
-    def __repr__(self):
-        return "b[%s %s]" % (self.low, self.high)
 
 class HalfPlane:
     def __init__(self, p1, p2):
-        self.a = -p2.y + p1.y
-        self.b = p2.x - p1.x
-        l = (self.a * self.a + self.b * self.b) ** 0.5
-        self.c = (-self.b * p1.y - self.a * p1.x) / l
-        self.a /= l
-        self.b /= l
+        self.v = Vector(-p2.y + p1.y, p2.x - p1.x)
+        l = self.v.length()
+        self.c = -self.v.dot(p1) / l
+        self.v = self.v * (1.0 / l)
+    def signed_distance(self, p):
+        return self.v.dot(p) + self.c
 
 class Shape:
     def draw(self, image, color, super_sampling = 6):
-        t = time.time()
         r = float(image.resolution)
         jitter = [Vector((x + random.random()) / super_sampling / r,
                          (y + random.random()) / super_sampling / r)
@@ -114,8 +103,6 @@ class Shape:
                             coverage += 1.0
                     image.pixels[y][x].draw(color.fainter(coverage / lj))
                 x += 1
-        elapsed = time.time() - t
-        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/(total_pixels+1))
 
 class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
     def __init__(self, *ps):
@@ -131,7 +118,7 @@ class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
         min_inside = 1e30
         max_outside = -1e30
         for plane in self.half_planes:
-            d = plane.a * p.x + plane.b * p.y + plane.c
+            d = plane.signed_distance(p)
             if d <= 0 and d > max_outside:
                 max_outside = d
             if d >= 0 and d < min_inside:
@@ -139,7 +126,7 @@ class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
         return max_outside if max_outside <> -1e30 else min_inside
     def contains(self, p):
         for plane in self.half_planes:
-            if plane.a * p.x + plane.b * p.y + plane.c < 0:
+            if plane.signed_distance(p) < 0:
                 return False
         return True
     def transform(self, xform):
@@ -171,42 +158,44 @@ class Ellipse(Shape):
                                   self.center + axes[0] - axes[1],
                                   self.center + axes[0] + axes[1])
     def value(self, p):
-        return self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
-               + self.d * p.x + self.e * p.y + self.f
+        return self.a*p.x*p.x + self.b*p.y*p.y + self.c*p.x*p.y \
+               + self.d*p.x + self.e*p.y + self.f
     def contains(self, p):
         return self.value(p) < 0
     def transform(self, transform):
         i = transform.inverse()
         ((m00, m01, m02), (m10, m11, m12),_) = i.m
-        aa = self.a * m00 * m00 + self.b * m10 * m10 + self.c * m00 * m10
-        bb = self.a * m01 * m01 + self.b * m11 * m11 + self.c * m01 * m11
-        cc = 2 * self.a * m00 * m01 + 2 * self.b * m10 * m11 \
-             + self.c * (m00 * m11 + m01 * m10)
-        dd = 2 * self.a * m00 * m02 + 2 * self.b * m10 * m12 \
-             + self.c * (m00 * m12 + m02 * m10) + self.d * m00 + self.e * m10
-        ee = 2 * self.a * m10 * m02 + 2 * self.b * m11 * m12 \
-             + self.c * (m01 * m12 + m02 * m11) + self.d * m01 + self.e * m11
-        ff = self.a * m02 * m02 + self.b * m12 * m12 + self.c * m02 * m12 \
-             + self.d * m02 + self.e * m12 + self.f
+        aa = self.a*m00*m00 + self.b*m10*m10 + self.c*m00*m10
+        bb = self.a*m01*m01 + self.b*m11*m11 + self.c*m01*m11
+        cc = 2*self.a*m00*m01 + 2*self.b*m10*m11 \
+             + self.c*(m00*m11 + m01*m10)
+        dd = 2*self.a*m00 * m02 + 2*self.b*m10*m12 \
+             + self.c*(m00*m12 + m02*m10) + self.d*m00 + self.e*m10
+        ee = 2*self.a*m10*m02 + 2*self.b*m11*m12 \
+             + self.c*(m01*m12 + m02*m11) + self.d*m01 + self.e*m11
+        ff = self.a*m02*m02 + self.b*m12*m12 + self.c*m02*m12 \
+             + self.d*m02 + self.e*m12 + self.f
         return Ellipse(aa, bb, cc, dd, ee, ff)
     def signed_distance_bound(self, p):
+        def sgn(x):
+            return 0 if x == 0 else x / abs(x)
         v = -sgn(self.value(p))
         c = self.center
         pc = p - c
-        u2 = self.a * pc.x ** 2 + self.b * pc.y ** 2 + self.c * pc.x * pc.y
-        u1 = self.a * 2 * c.x * pc.x + self.b * 2 * c.y * pc.y \
-             + self.c * c.y * pc.x + self.c * c.x * pc.y + self.d * pc.x \
-             + self.e * pc.y
-        u0 = self.a * c.x ** 2 + self.b * c.y ** 2 + self.c * c.x * c.y \
-             + self.d * c.x + self.e * c.y + self.f
+        u2 = self.a*pc.x**2 + self.b*pc.y**2 + self.c*pc.x*pc.y
+        u1 = 2*self.a*c.x*pc.x + 2*self.b*c.y*pc.y \
+             + self.c*c.y*pc.x + self.c*c.x*pc.y + self.d*pc.x \
+             + self.e*pc.y
+        u0 = self.a*c.x**2 + self.b*c.y**2 + self.c*c.x*c.y \
+             + self.d*c.x + self.e*c.y + self.f
         sols = quadratic(u2, u1, u0)
-        crossings = c + pc * sols[0], c + pc * sols[1]
+        crossings = c+pc*sols[0], c+pc*sols[1]
         if (p - crossings[0]).length() < (p - crossings[1]).length():
             surface_pt = crossings[0]
         else:
             surface_pt = crossings[1]
-        d = Vector(2 * self.a * surface_pt.x + self.c * surface_pt.y + self.d,
-                   2 * self.b * surface_pt.y + self.c * surface_pt.x + self.e)
+        d = Vector(2*self.a*surface_pt.x + self.c*surface_pt.y + self.d,
+                   2*self.b*surface_pt.y + self.c*surface_pt.x + self.e)
         return v * abs(d.dot(p - surface_pt) / d.length())
 
 def Circle(center, radius):
