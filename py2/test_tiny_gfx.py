@@ -43,7 +43,7 @@ def do_it():
     #                      .transform(translate(0.2, 0.2))
     #                      .transform(around(Vector(0.2, 0.2), scale(0.5, 1)))
     #                      ,Color(0,0,0,1))])
-    
+
     s.draw(i)
     i.write_ppm(f)
     f.close()

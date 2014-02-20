@@ -240,6 +240,14 @@ class Ellipse(Shape):
         self.e = e
         self.f = f
         self.bound = AABox(Vector(0,0),Vector(1,1))
+        # kind of a terrible hack, but I'm running out of LOCs
+        t = Transform(2 * a, c, 0, c, 2 * b, 0)
+        self.center = t.inverse() * Vector(-d, -e)
+        s = t.svd()
+        a1 = (s[1].m[0][0] / 2) ** -0.5
+        a2 = (s[1].m[1][1] / 2) ** -0.5
+        self.axes = [Vector(s[0].m[0][0], s[0].m[1][0]) * a1,
+                     Vector(s[0].m[0][1], s[0].m[1][1]) * a2]
     def contains(self, p):
         v = self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
             + self.d * p.x + self.e * p.y + self.f
@@ -265,7 +273,6 @@ def Circle(center, radius):
     return Ellipse().transform(
         scale(radius, radius)).transform(
         translate(center.x, center.y))
-
 
 def LineSegment(v1, v2, thickness):
     d = v2 - v1
