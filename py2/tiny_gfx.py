@@ -41,8 +41,6 @@ class AABox:
         self.high = p1.max(p2)
     def midpoint(self):
         return (self.low + self.high) * 0.5
-    def bounds(self):
-        return self
     def size(self):
         return self.high - self.low
     def contains(self, p):
@@ -51,7 +49,24 @@ class AABox:
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
-
+    def signed_distance_bound(self, p):
+        if self.contains(p):
+            return 0
+        if p.x < self.low.x:
+            x = self.low.x - p.x
+        elif p.x > self.high.x:
+            x = p.x - self.high.x
+        else:
+            x = 0
+        if p.y < self.low.y:
+            y = self.low.y - p.y
+        elif p.y > self.high.y:
+            y = p.y - self.high.y
+        else:
+            y = 0
+        return -(x ** 2 + y ** 2) ** 0.5
+    def __repr__(self):
+        return "b[%s %s]" % (self.low, self.high)
 class HalfPlane:
     def __init__(self, p1, p2):
         self.a = -p2.y + p1.y
@@ -65,16 +80,67 @@ class HalfPlane:
 ##############################################################################
 # Shapes
 
-# class Shape:
-#     def signed_distance_bound(self, p): pass
-#     self.bound
-#     def contains(self, p): pass
-#     def transform(self, transform): pass
-#     def draw(self, image, color): pass
+class Shape:
+    # def signed_distance_bound(self, p): pass
+    # self.bound
+    # def contains(self, p): pass
+    # def transform(self, transform): pass
+    def draw(self, image, color, super_sampling = 6):
+        t = time.time()
+        r = float(image.resolution)
+        jitter = [Vector((x + random.random()) / super_sampling / r,
+                         (y + random.random()) / super_sampling / r)
+                  for (x, y) in product(xrange(super_sampling), repeat=2)]
+        # jitter = [Vector(0,0)]
+        lj = len(jitter)
+        total_pixels = 0
+        tb = self.bound
+        if not tb.overlaps(image.bounds()):
+            return
+        l_x = max(0, int(tb.low.x * r))
+        l_y = max(0, int(tb.low.y * r))
+        h_x = min(r-1, int(tb.high.x * r))
+        h_y = min(r-1, int(tb.high.y * r))
+        corners = [(0, 0), (1.0/r, 0), (0, 1.0/r), (1.0/r, 1.0/r)]
+        for y in xrange(l_y, int(h_y+1)):
+            x = l_x
+            while x <= h_x:
+                corner = Vector(x / r, y / r)
+                b = self.signed_distance_bound(corner) * r
+                if b > 1.414:
+                    steps = int(b - 0.414)
+                    for x_ in xrange(x, min(x + steps, int(h_x+1))):
+                        image.pixels[y][x_].draw(color)
+                    x += steps
+                    total_pixels += min(x + steps, int(h_x+1)) - x
+                    continue
+                elif b < -1.414:
+                    steps = int(-b - 0.414)
+                    x += steps
+                    continue
+                s = 0
+                for x_, y_ in corners:
+                    if self.contains(corner + Vector(x_, y_)):
+                        s += 1
+                if s == 4:
+                    total_pixels += 1
+                    image.pixels[y][x].draw(color)
+                elif s > 0:
+                    total_pixels += 1
+                    coverage = 0
+                    for j in jitter:
+                        if self.contains(corner + j):
+                            coverage += 1.0
+                    image.pixels[y][x].draw(color.fainter(coverage / lj))
+                # else:
+                #     image.pixels[y][x].draw(Color(1,0,0,1))
+                x += 1
+        elapsed = time.time() - t
+        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/(total_pixels+1))
 
 # a *convex* poly, in ccw order of vertices, with no repeating vertices
 # non-convex polys will break this
-class Poly:
+class Poly(Shape):
     def __init__(self, *ps):
         mn = min(enumerate(ps), key=lambda (i,v): (v.y, v.x))[0]
         self.vs = list(ps[mn:]) + list(ps[:mn])
@@ -131,56 +197,6 @@ class Poly:
         return "[ Poly %s ]" % len(self.vs)
     def transform(self, xform):
         return Poly(*(xform * v for v in self.vs))
-    def draw(self, image, color):
-        t = time.time()
-        r = float(image.resolution)
-        super_sampling = 6
-        jitter = [Vector((x + random.random()) / super_sampling / r,
-                         (y + random.random()) / super_sampling / r)
-                  for (x, y) in product(xrange(super_sampling), repeat=2)]
-        lj = len(jitter)
-        total_pixels = 0
-        tb = self.bound
-        if not tb.overlaps(image.bounds()):
-            return
-        l_x = max(0, int(tb.low.x * r))
-        l_y = max(0, int(tb.low.y * r))
-        h_x = min(r-1, int(tb.high.x * r))
-        h_y = min(r-1, int(tb.high.y * r))
-        corners = [(0, 0), (1.0/r, 0), (0, 1.0/r), (1.0/r, 1.0/r)]
-        for y in xrange(l_y, int(h_y+1)):
-            x = l_x
-            while x <= h_x:
-                corner = Vector(x / r, y / r)
-                b = self.signed_distance_bound(corner) * r
-                if b > 1.414:
-                    steps = int(b - 0.414)
-                    for x_ in xrange(x, min(x + steps, int(h_x+1))):
-                        image.pixels[y][x_].draw(color)
-                    x += steps
-                    total_pixels += min(x + steps, int(h_x+1)) - x
-                    continue
-                elif b < -1.414:
-                    steps = int(-b - 0.414)
-                    x += steps
-                    continue
-                s = 0
-                for x_, y_ in corners:
-                    if self.contains(corner + Vector(x_, y_)):
-                        s += 1
-                if s == 4:
-                    total_pixels += 1
-                    image.pixels[y][x].draw(color)
-                elif s > 0:
-                    total_pixels += 1
-                    coverage = 0
-                    for j in jitter:
-                        if self.contains(corner + j):
-                            coverage += 1.0
-                    image.pixels[y][x].draw(color.fainter(coverage / lj))
-                x += 1
-        elapsed = time.time() - t
-        print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/total_pixels)
 
 Triangle, Quad = Poly, Poly
 
@@ -215,11 +231,41 @@ def Rectangle(v1, v2):
                 Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
                 Vector(min(v1.x, v2.x), max(v1.y, v2.y)))
 
-def Circle(center=Vector(0,0), radius=1, k=256):
-    d = math.pi * 2 / k
-    lst = [center + Vector(math.cos(i*d), math.sin(i*d)) * radius
-           for i in xrange(k)]
-    return Poly(*lst)
+class Ellipse(Shape):
+    def __init__(self, a=1.0, b=1.0, c=0.0, d=0.0, e=0.0, f=-1.0):
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
+        self.e = e
+        self.f = f
+        self.bound = AABox(Vector(0,0),Vector(1,1))
+    def contains(self, p):
+        v = self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
+            + self.d * p.x + self.e * p.y + self.f
+        return v < 0
+    def transform(self, transform):
+        i = transform.inverse()
+        ((m00, m01, m02), (m10, m11, m12),_) = i.m
+        aa = self.a * m00 * m00 + self.b * m10 * m10 + self.c * m00 * m10
+        bb = self.a * m01 * m01 + self.b * m11 * m11 + self.c * m01 * m11
+        cc = 2 * self.a * m00 * m01 + 2 * self.b * m10 * m11 \
+             + self.c * (m00 * m11 + m01 * m10)
+        dd = 2 * self.a * m00 * m02 + 2 * self.b * m10 * m12 \
+             + self.c * (m00 * m12 + m02 * m10) + self.d * m00 + self.e * m10
+        ee = 2 * self.a * m10 * m02 + 2 * self.b * m11 * m12 \
+             + self.c * (m01 * m12 + m02 * m11) + self.d * m01 + self.e * m11
+        ff = self.a * m02 * m02 + self.b * m12 * m12 + self.c * m02 * m12 \
+             + self.d * m02 + self.e * m12 + self.f
+        return Ellipse(aa, bb, cc, dd, ee, ff)
+    def signed_distance_bound(self, p):
+        return 0
+
+def Circle(center, radius):
+    return Ellipse().transform(
+        scale(radius, radius)).transform(
+        translate(center.x, center.y))
+
 
 def LineSegment(v1, v2, thickness):
     d = v2 - v1
@@ -311,7 +357,7 @@ class Scene:
                 yield node.transform(this_xform)
         
 ################################################################################
-# affine 2D transforms, encoded by a matrix
+# affine 2D transforms, encoded by a 3x3 matrix in homogeneous coordinates
 # ( m11 m12 tx )
 # ( m21 m22 ty )
 # (  0   0   1 )
@@ -341,12 +387,36 @@ class Transform:
                          -d * self.m[1][0], d * self.m[0][0], -self.m[1][2])
     def __str__(self):
         return str(self.m)
-
+    def transpose(self):
+        t = self.m
+        return Transform(t[0][0], t[1][0], 0,
+                         t[0][1], t[1][1], 0)
+    def svd(self):
+        def sgn(x):
+            return 0 if x == 0 else x / abs(x)
+        selft = self.transpose()
+        Su = self * selft
+        phi = 0.5 * math.atan2(Su.m[0][1] + Su.m[1][0], Su.m[0][0] - Su.m[1][1])
+        U = rotate(phi)
+        Sw = selft * self
+        theta = 0.5 * math.atan2(Sw.m[0][1] + Sw.m[1][0], Sw.m[0][0] - Sw.m[1][1])
+        W = rotate(theta)
+        SUsum = Su.m[0][0] + Su.m[1][1]
+        SUdif = ((Su.m[0][0] - Su.m[1][1]) ** 2 + 4 * Su.m[0][1] * Su.m[1][0]) ** 0.5
+        SIG = scale(((SUsum + SUdif) / 2) ** 0.5, ((SUsum - SUdif) / 2) ** 0.5)
+        S = U.transpose() * self * W
+        C = scale(sgn(S.m[0][0]), sgn(S.m[1][1]))
+        V = W * C
+        return U * C, SIG, W
+    def __str__(self):
+        return "(%.3f %.3f %.3f)\n(%.3f %.3f %.3f)" % tuple(self.m[0] + self.m[1])
+    def __repr__(self):
+        return "(%.3f %.3f %.3f)\n(%.3f %.3f %.3f)" % tuple(self.m[0] + self.m[1])
+        
 def identity():
     return Transform(1, 0, 0, 0, 1, 0)
 
 def rotate(theta):
-    theta = math.radians(theta)
     s = math.sin(theta)
     c = math.cos(theta)
     return Transform(c, -s, 0, s, c, 0)
