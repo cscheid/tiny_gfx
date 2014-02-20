@@ -6,6 +6,16 @@ import random
 import sys
 import time
 
+def sgn(x):
+    return 0 if x == 0 else x / abs(x)
+
+def quadratic(a, b, c):
+    d = (b * b - 4 * a * c) ** 0.5
+    if b >= 0:
+        return (-b - d) / (2 * a), (2 * c) / (-b - d)
+    else:
+        return (2 * c) / (-b + d), (-b + d) / (2 * a)
+
 ##############################################################################
 # Geometry
 
@@ -20,6 +30,8 @@ class Vector:
         return Vector(-self.x, -self.y)
     def __mul__(self, k):
         return Vector(self.x * k, self.y * k)
+    def dot(self, o):
+        return self.x * o.x + self.y * o.y
     def cross(self, o):
         return self.x * o.y - self.y * o.x
     def min(self, o):
@@ -239,6 +251,7 @@ class Ellipse(Shape):
         self.d = d
         self.e = e
         self.f = f
+        # TODO
         self.bound = AABox(Vector(0,0),Vector(1,1))
         # kind of a terrible hack, but I'm running out of LOCs
         t = Transform(2 * a, c, 0, c, 2 * b, 0)
@@ -248,10 +261,11 @@ class Ellipse(Shape):
         a2 = (s[1].m[1][1] / 2) ** -0.5
         self.axes = [Vector(s[0].m[0][0], s[0].m[1][0]) * a1,
                      Vector(s[0].m[0][1], s[0].m[1][1]) * a2]
-    def contains(self, p):
-        v = self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
+    def value(self, p):
+        return self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
             + self.d * p.x + self.e * p.y + self.f
-        return v < 0
+    def contains(self, p):
+        return self.value(p) < 0
     def transform(self, transform):
         i = transform.inverse()
         ((m00, m01, m02), (m10, m11, m12),_) = i.m
@@ -267,7 +281,24 @@ class Ellipse(Shape):
              + self.d * m02 + self.e * m12 + self.f
         return Ellipse(aa, bb, cc, dd, ee, ff)
     def signed_distance_bound(self, p):
-        return 0
+        v = -sgn(self.value(p))
+        c = self.center
+        pc = p - c
+        u2 = self.a * pc.x ** 2 + self.b * pc.y ** 2 + self.c * pc.x * pc.y
+        u1 = self.a * 2 * c.x * pc.x + self.b * 2 * c.y * pc.y \
+             + self.c * c.y * pc.x + self.c * c.x * pc.y + self.d * pc.x \
+             + self.e * pc.y
+        u0 = self.a * c.x ** 2 + self.b * c.y ** 2 + self.c * c.x * c.y \
+             + self.d * c.x + self.e * c.y + self.f
+        sols = quadratic(u2, u1, u0)
+        crossings = c + pc * sols[0], c + pc * sols[1]
+        if (p - crossings[0]).length() < (p - crossings[1]).length():
+            surface_pt = crossings[0]
+        else:
+            surface_pt = crossings[1]
+        d = Vector(2 * self.a * surface_pt.x + self.c * surface_pt.y + self.d,
+                   2 * self.b * surface_pt.y + self.c * surface_pt.x + self.e)
+        return v * abs(d.dot(p - surface_pt) / d.length())
 
 def Circle(center, radius):
     return Ellipse().transform(
@@ -399,8 +430,6 @@ class Transform:
         return Transform(t[0][0], t[1][0], 0,
                          t[0][1], t[1][1], 0)
     def svd(self):
-        def sgn(x):
-            return 0 if x == 0 else x / abs(x)
         selft = self.transpose()
         Su = self * selft
         phi = 0.5 * math.atan2(Su.m[0][1] + Su.m[1][0], Su.m[0][0] - Su.m[1][1])
