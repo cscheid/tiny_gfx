@@ -1,5 +1,4 @@
 import math
-import copy
 from itertools import product
 import random
 
@@ -57,7 +56,10 @@ class HalfPlane:
         return self.v.dot(p) + self.c
 
 class Shape:
-    def draw(self, image, color, super_sampling = 6):
+    def __init__(self, color=None):
+        self.color = color if color is not None else Color()
+    def draw(self, image, super_sampling = 6):
+        color = self.color
         r = float(image.resolution)
         jitter = [Vector((x + random.random()) / super_sampling / r,
                          (y + random.random()) / super_sampling / r)
@@ -105,7 +107,8 @@ class Shape:
                 x += 1
 
 class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
-    def __init__(self, *ps):
+    def __init__(self, ps, color=None):
+        Shape.__init__(self, color)
         mn = min(enumerate(ps), key=lambda (i,v): (v.y, v.x))[0]
         self.vs = list(ps[mn:]) + list(ps[:mn])
         self.bound = Vector.union(*self.vs)
@@ -130,18 +133,20 @@ class Poly(Shape): # a *convex* poly, in ccw order, with no repeating vertices
                 return False
         return True
     def transform(self, xform):
-        return Poly(*(xform * v for v in self.vs))
+        return Poly(list(xform * v for v in self.vs), color=self.color)
 
 Triangle, Quad = Poly, Poly
 
-def Rectangle(v1, v2):
-    return Quad(Vector(min(v1.x, v2.x), min(v1.y, v2.y)),
-                Vector(max(v1.x, v2.x), min(v1.y, v2.y)),
-                Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
-                Vector(min(v1.x, v2.x), max(v1.y, v2.y)))
+def Rectangle(v1, v2, color=None):
+    return Quad([Vector(min(v1.x, v2.x), min(v1.y, v2.y)),
+                 Vector(max(v1.x, v2.x), min(v1.y, v2.y)),
+                 Vector(max(v1.x, v2.x), max(v1.y, v2.y)),
+                 Vector(min(v1.x, v2.x), max(v1.y, v2.y))],
+                color=color)
 
 class Ellipse(Shape):
-    def __init__(self, a=1.0, b=1.0, c=0.0, d=0.0, e=0.0, f=-1.0):
+    def __init__(self, a=1.0, b=1.0, c=0.0, d=0.0, e=0.0, f=-1.0, color=None):
+        Shape.__init__(self, color)
         self.a = a
         self.b = b
         self.c = c
@@ -175,7 +180,7 @@ class Ellipse(Shape):
              + self.c*(m01*m12 + m02*m11) + self.d*m01 + self.e*m11
         ff = self.a*m02*m02 + self.b*m12*m12 + self.c*m02*m12 \
              + self.d*m02 + self.e*m12 + self.f
-        return Ellipse(aa, bb, cc, dd, ee, ff)
+        return Ellipse(aa, bb, cc, dd, ee, ff, color=self.color)
     def signed_distance_bound(self, p):
         def sgn(x):
             return 0 if x == 0 else x / abs(x)
@@ -198,27 +203,29 @@ class Ellipse(Shape):
                    2*self.b*surface_pt.y + self.c*surface_pt.x + self.e)
         return v * abs(d.dot(p - surface_pt) / d.length())
 
-def Circle(center, radius):
-    return Ellipse().transform(
+def Circle(center, radius, color=None):
+    return Ellipse(color=color).transform(
         scale(radius, radius)).transform(
         translate(center.x, center.y))
 
-def LineSegment(v1, v2, thickness):
+def LineSegment(v1, v2, thickness, color=None):
     d = v2 - v1
     d.x, d.y = -d.y, d.x
     d *= thickness / d.length() / 2
-    return Quad(v1 + d, v1 - d, v2 - d, v2 + d)
+    return Quad([v1 + d, v1 - d, v2 - d, v2 + d], color=color)
 
 class CSG(Shape):
-    def __init__(self, v1, v2):
+    def __init__(self, v1, v2, color=None):
+        Shape.__init__(self, color or v1.color or v2.color)
         self.v1 = v1
         self.v2 = v2
     def transform(self, t):
-        return self.__class__(self.v1.transform(t), self.v2.transform(t))
+        return self.__class__(self.v1.transform(t), self.v2.transform(t),
+                              color=self.color)
 
 class Union(CSG):
-    def __init__(self, v1, v2):
-        CSG.__init__(self, v1, v2)
+    def __init__(self, v1, v2, color=None):
+        CSG.__init__(self, v1, v2, color=color)
         self.bound = Vector.union(v1.bound.low, v1.bound.high,
                                   v2.bound.low, v2.bound.high)
     def contains(self, p):
@@ -229,8 +236,8 @@ class Union(CSG):
         return b1 if b1 > b2 else b2
 
 class Intersection(CSG):
-    def __init__(self, v1, v2):
-        CSG.__init__(self, v1, v2)
+    def __init__(self, v1, v2, color=None):
+        CSG.__init__(self, v1, v2, color=color)
         self.bound = v1.bound.intersection(v2.bound)
     def contains(self, p):
         return self.v1.contains(p) and self.v2.contains(p)
@@ -240,8 +247,8 @@ class Intersection(CSG):
         return b1 if b1 < b2 else b2
 
 class Subtraction(CSG):
-    def __init__(self, v1, v2):
-        CSG.__init__(self, v1, v2)
+    def __init__(self, v1, v2, color=None):
+        CSG.__init__(self, v1, v2, color=color)
         self.bound = self.v1.bound
     def contains(self, p):
         return self.v1.contains(p) and not self.v2.contains(p)
@@ -274,7 +281,8 @@ class Color:
         return "%c%c%c" % (byte(self.rgb[0] * self.a),
                            byte(self.rgb[1] * self.a),
                            byte(self.rgb[2] * self.a))
-
+    def __repr__(self):
+        return "[" + str(self.rgb) + "," + str(self.a) + "]"
 class PPMImage:
     def __init__(self, resolution, bg=Color()):
         self.resolution = resolution
@@ -282,7 +290,7 @@ class PPMImage:
         for i in xrange(self.resolution):
             lst = []
             for j in xrange(self.resolution):
-                lst.append(copy.copy(bg))
+                lst.append(Color(bg.rgb, bg.a))
             self.pixels.append(lst)
     def bounds(self):
         return AABox(Vector(0,0), Vector(1,1))
@@ -307,15 +315,15 @@ class Scene:
     def add(self, node):
         self.nodes.append(node)
     def draw(self, image):
-        for grob in self.traverse(identity()):
-            grob.draw(image)
+        for shape in self.traverse(identity()):
+            shape.draw(image)
     def traverse(self, xform):
         this_xform = xform * self.transform
         for node in self.nodes:
             if isinstance(node, Scene):
                 for n in node.traverse(this_xform):
                     yield n
-            elif isinstance(node, Grob):
+            elif isinstance(node, Shape):
                 yield node.transform(this_xform)
         
 class Transform:
@@ -367,14 +375,3 @@ def scale(x, y):
 
 def around(v, t):
     return translate(v.x, v.y) * t * translate(-v.x, -v.y)
-        
-class Grob:
-    def __init__(self, shape, color):
-        self.shape = shape
-        self.color = color
-    def contains(self, p):
-        return self.shape.contains(p)
-    def draw(self, image):
-        self.shape.draw(image, self.color)
-    def transform(self, transform):
-        return Grob(self.shape.transform(transform), self.color)
