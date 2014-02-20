@@ -95,17 +95,12 @@ class HalfPlane:
 # Shapes
 
 class Shape:
-    # def signed_distance_bound(self, p): pass
-    # self.bound
-    # def contains(self, p): pass
-    # def transform(self, transform): pass
     def draw(self, image, color, super_sampling = 6):
         t = time.time()
         r = float(image.resolution)
         jitter = [Vector((x + random.random()) / super_sampling / r,
                          (y + random.random()) / super_sampling / r)
                   for (x, y) in product(xrange(super_sampling), repeat=2)]
-        # jitter = [Vector(0,0)]
         lj = len(jitter)
         total_pixels = 0
         tb = self.bound
@@ -253,16 +248,16 @@ class Ellipse(Shape):
         self.d = d
         self.e = e
         self.f = f
-        # TODO
-        self.bound = AABox(Vector(0,0),Vector(1,1))
         # kind of a terrible hack, but I'm running out of LOCs
         t = Transform(2 * a, c, 0, c, 2 * b, 0)
         self.center = t.inverse() * Vector(-d, -e)
-        s = t.svd()
-        a1 = (s[1].m[0][0] / 2) ** -0.5
-        a2 = (s[1].m[1][1] / 2) ** -0.5
-        self.axes = [Vector(s[0].m[0][0], s[0].m[1][0]) * a1,
-                     Vector(s[0].m[0][1], s[0].m[1][1]) * a2]
+        l1, l0 = quadratic(1, 2 * (-a - b), 4 * a * b - c * c)
+        v = t.eigv()
+        axes = [v[0] * ((l0 / 2) ** -0.5), v[1] * ((l1 / 2) ** -0.5)]
+        self.bound = Vector.union(self.center - axes[0] - axes[1],
+                                  self.center - axes[0] + axes[1],
+                                  self.center + axes[0] - axes[1],
+                                  self.center + axes[0] + axes[1])
     def value(self, p):
         return self.a * p.x * p.x + self.b * p.y * p.y + self.c * p.x * p.y \
             + self.d * p.x + self.e * p.y + self.f
@@ -418,9 +413,11 @@ class PPMImage:
             out.write(self.pixels[y][x].as_ppm())
 
 class Scene:
-    def __init__(self, nodes=[], transform=None):
+    def __init__(self, nodes=None, transform=None):
         if transform is None:
             transform = identity()
+        if nodes is None:
+            nodes = []
         self.transform = transform
         self.nodes = nodes
     def add(self, node):
@@ -434,7 +431,7 @@ class Scene:
             if isinstance(node, Scene):
                 for n in node.traverse(this_xform):
                     yield n
-            elif isinstance(node, ShapeGrob):
+            elif isinstance(node, Grob):
                 yield node.transform(this_xform)
         
 ################################################################################
@@ -468,25 +465,16 @@ class Transform:
                          -d * self.m[1][0], d * self.m[0][0], -self.m[1][2])
     def __str__(self):
         return str(self.m)
-    def transpose(self):
-        t = self.m
-        return Transform(t[0][0], t[1][0], 0,
-                         t[0][1], t[1][1], 0)
-    def svd(self):
-        selft = self.transpose()
-        Su = self * selft
-        phi = 0.5 * math.atan2(Su.m[0][1] + Su.m[1][0], Su.m[0][0] - Su.m[1][1])
-        U = rotate(phi)
-        Sw = selft * self
-        theta = 0.5 * math.atan2(Sw.m[0][1] + Sw.m[1][0], Sw.m[0][0] - Sw.m[1][1])
-        W = rotate(theta)
-        SUsum = Su.m[0][0] + Su.m[1][1]
-        SUdif = ((Su.m[0][0] - Su.m[1][1]) ** 2 + 4 * Su.m[0][1] * Su.m[1][0]) ** 0.5
-        SIG = scale(((SUsum + SUdif) / 2) ** 0.5, ((SUsum - SUdif) / 2) ** 0.5)
-        S = U.transpose() * self * W
-        C = scale(sgn(S.m[0][0]), sgn(S.m[1][1]))
-        V = W * C
-        return U * C, SIG, W
+    def eigv(self): # power iteration, ignores translation, assumes SPD
+        a = Vector(random.random(), random.random())
+        last = Vector(0,0)
+        t = Transform(self.m[0][0], self.m[0][1], 0,
+                      self.m[1][0], self.m[1][1], 0)
+        while (a - last).length() > 1e-6:
+            last = a
+            a = t * a
+            a = a * (1.0 / a.length())
+        return a, Vector(-a.y, a.x)
     def __str__(self):
         return "(%.3f %.3f %.3f)\n(%.3f %.3f %.3f)" % tuple(self.m[0] + self.m[1])
     def __repr__(self):
@@ -511,7 +499,7 @@ def around(v, t):
 
 ################################################################################
         
-class ShapeGrob:
+class Grob:
     def __init__(self, shape, color):
         self.shape = shape
         self.color = color
@@ -520,8 +508,4 @@ class ShapeGrob:
     def draw(self, image):
         self.shape.draw(image, self.color)
     def transform(self, transform):
-        return ShapeGrob(self.shape.transform(transform), self.color)
-
-def TransformedShapeGrob(xform, shape, color):
-    xform_shape = shape.transform(xform)
-    return ShapeGrob(xform_shape, color)
+        return Grob(self.shape.transform(transform), self.color)
