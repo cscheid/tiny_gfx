@@ -61,6 +61,8 @@ class AABox:
     def overlaps(self, r):
         return not (r.low.x >= self.high.x or r.high.x <= self.low.x or
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
+    def intersection(self, other):
+        return AABox(self.low.max(other.low), self.high.min(other.high))
     def signed_distance_bound(self, p):
         if self.contains(p):
             return 0
@@ -79,15 +81,15 @@ class AABox:
         return -(x ** 2 + y ** 2) ** 0.5
     def __repr__(self):
         return "b[%s %s]" % (self.low, self.high)
+
 class HalfPlane:
     def __init__(self, p1, p2):
         self.a = -p2.y + p1.y
         self.b = p2.x - p1.x
         l = (self.a * self.a + self.b * self.b) ** 0.5
-        self.c = -self.b * p1.y - self.a * p1.x
+        self.c = (-self.b * p1.y - self.a * p1.x) / l
         self.a /= l
         self.b /= l
-        self.c /= l
 
 ##############################################################################
 # Shapes
@@ -310,7 +312,48 @@ def LineSegment(v1, v2, thickness):
     d.x, d.y = -d.y, d.x
     d *= thickness / d.length() / 2
     return Quad(v1 + d, v1 - d, v2 - d, v2 + d)
-    
+
+class CSG(Shape):
+    def __init__(self, v1, v2):
+        self.v1 = v1
+        self.v2 = v2
+    def transform(self, t):
+        return self.__class__(self.v1.transform(t), self.v2.transform(t))
+
+class Union(CSG):
+    def __init__(self, v1, v2):
+        CSG.__init__(self, v1, v2)
+        self.bound = Vector.union(v1.bound.low, v1.bound.high,
+                                  v2.bound.low, v2.bound.high)
+    def contains(self, p):
+        return self.v1.contains(p) or self.v2.contains(p)
+    def signed_distance_bound(self, p):
+        b1 = self.v1.signed_distance_bound(p)
+        b2 = self.v2.signed_distance_bound(p)
+        return b1 if b1 > b2 else b2
+
+class Intersection(CSG):
+    def __init__(self, v1, v2):
+        CSG.__init__(self, v1, v2)
+        self.bound = v1.bound.intersection(v2.bound)
+    def contains(self, p):
+        return self.v1.contains(p) and self.v2.contains(p)
+    def signed_distance_bound(self, p):
+        b1 = self.v1.signed_distance_bound(p)
+        b2 = self.v2.signed_distance_bound(p)
+        return b1 if b1 < b2 else b2
+
+class Subtraction(CSG):
+    def __init__(self, v1, v2):
+        CSG.__init__(self, v1, v2)
+        self.bound = self.v1.bound
+    def contains(self, p):
+        return self.v1.contains(p) and not self.v2.contains(p)
+    def signed_distance_bound(self, p):
+        b1 = self.v1.signed_distance_bound(p)
+        b2 = -self.v2.signed_distance_bound(p)
+        return b1 if b1 < b2 else b2
+
 ##############################################################################
 
 class Color:
