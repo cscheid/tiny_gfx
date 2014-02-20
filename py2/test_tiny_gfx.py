@@ -1,10 +1,11 @@
 from tiny_gfx import *
 import sys
 import cProfile
+import random
 
 def do_it():
     f = open(sys.argv[1], 'w')
-    i = PPMImage(256, Color(1,1,1,1))
+    i = PPMImage(512, Color(1,1,1,1))
     s = Scene()
     s2 = Scene([
         ShapeGrob(LineSegment(Vector(0.0,0), Vector(0.0,1), 0.01), Color(1,0,0,1)),
@@ -30,13 +31,44 @@ def do_it():
                              Circle(Vector(0.9, 0.5), 0.2),
                              Color(0,1,1,0.5)),
         s2,
-        Scene([s2], around(Vector(0.5, 0.5), rotate(90))),
+        Scene([s2], around(Vector(0.5, 0.5), rotate(math.radians(90)))),
         ]:
         s.add(grob)
+
+    # s = Scene([ShapeGrob(Circle(Vector(0.5,0.9), 0.2), Color(0,0,0,1))])
+    # s = Scene([ShapeGrob(Ellipse().transform(scale(0.5, 1)).transform(translate(0.5,0)), Color(0,0,0,1))])
+    # s = Scene([ShapeGrob(Ellipse().transform(translate(0.5,0)).transform(scale(0.5, 1)), Color(0,0,0,1))])
+    # s = Scene([ShapeGrob(Ellipse()
+    #                      .transform(scale(0.1, 0.1))
+    #                      .transform(translate(0.2, 0.2))
+    #                      .transform(around(Vector(0.2, 0.2), scale(0.5, 1)))
+    #                      ,Color(0,0,0,1))])
+    
     s.draw(i)
     i.write_ppm(f)
     f.close()
-    
+
+def test_svd():
+    id = identity()
+    for i in xrange(10000):
+        t = Transform(random.normalvariate(0,1), random.normalvariate(0,1), 0,
+                      random.normalvariate(0,1), random.normalvariate(0,1), 0)
+        s = t.svd()
+        tt = s[0] * s[1] * s[2].transpose()
+        v = t * tt.inverse()
+        for l1, l2 in zip(id.m, v.m):
+            for v1, v2 in zip(l1, l2):
+                if abs(v1 - v2) > 1e-5:
+                    print "Matrix failed!"
+                    print s
+                    print t
+                    print tt
+                    print v1, v2
+                    print t.det()
+                    raise Exception("boo")
+    print "10000 svd tests passed with matrices from IID unit gaussians"
+
 if __name__ == '__main__':
-    # do_it()
-    cProfile.run("do_it()", sort="time")
+    do_it()
+    # test_svd()
+    # cProfile.run("do_it()", sort="time")
