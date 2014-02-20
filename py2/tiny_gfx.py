@@ -63,22 +63,6 @@ class AABox:
                     r.low.y >= self.high.y or r.high.y <= self.low.y)
     def intersection(self, other):
         return AABox(self.low.max(other.low), self.high.min(other.high))
-    def signed_distance_bound(self, p):
-        if self.contains(p):
-            return 0
-        if p.x < self.low.x:
-            x = self.low.x - p.x
-        elif p.x > self.high.x:
-            x = p.x - self.high.x
-        else:
-            x = 0
-        if p.y < self.low.y:
-            y = self.low.y - p.y
-        elif p.y > self.high.y:
-            y = p.y - self.high.y
-        else:
-            y = 0
-        return -(x ** 2 + y ** 2) ** 0.5
     def __repr__(self):
         return "b[%s %s]" % (self.low, self.high)
 
@@ -141,8 +125,6 @@ class Shape:
                         if self.contains(corner + j):
                             coverage += 1.0
                     image.pixels[y][x].draw(color.fainter(coverage / lj))
-                # else:
-                #     image.pixels[y][x].draw(Color(1,0,0,1))
                 x += 1
         elapsed = time.time() - t
         print >>sys.stderr, "%s\t%s\t%.3f %.8f" % (self, total_pixels, elapsed, elapsed/(total_pixels+1))

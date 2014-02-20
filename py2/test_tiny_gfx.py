@@ -71,29 +71,29 @@ def test_eigv():
     v = Transform(2, 0, 0, 0, 1, 0)
     print >>sys.stderr, v.eigv()
 
-def test_svd():
-    id = identity()
-    for i in xrange(10000):
-        t = Transform(random.normalvariate(0,1), random.normalvariate(0,1), 0,
-                      random.normalvariate(0,1), random.normalvariate(0,1), 0)
-        s = t.svd()
-        tt = s[0] * s[1] * s[2].transpose()
-        v = t * tt.inverse()
-        for l1, l2 in zip(id.m, v.m):
-            for v1, v2 in zip(l1, l2):
-                if abs(v1 - v2) > 1e-5:
-                    print "Matrix failed!"
-                    print sx
-                    print t
-                    print tt
-                    print v1, v2
-                    print t.det()
-                    raise Exception("boo")
-    print "10000 svd tests passed with matrices from IID unit gaussians"
+# def test_svd():
+#     id = identity()
+#     for i in xrange(10000):
+#         t = Transform(random.normalvariate(0,1), random.normalvariate(0,1), 0,
+#                       random.normalvariate(0,1), random.normalvariate(0,1), 0)
+#         s = t.svd()
+#         tt = s[0] * s[1] * s[2].transpose()
+#         v = t * tt.inverse()
+#         for l1, l2 in zip(id.m, v.m):
+#             for v1, v2 in zip(l1, l2):
+#                 if abs(v1 - v2) > 1e-5:
+#                     print "Matrix failed!"
+#                     print sx
+#                     print t
+#                     print tt
+#                     print v1, v2
+#                     print t.det()
+#                     raise Exception("boo")
+#     print "10000 svd tests passed with matrices from IID unit gaussians"
 
 if __name__ == '__main__':
     test_ellipse()
     test_eigv()
-    test_svd()
+    # test_svd()
     do_it()
     # cProfile.run("do_it()", sort="time")
