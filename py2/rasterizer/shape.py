@@ -27,15 +27,16 @@ class Shape:
             while x <= h_x:
                 corner = Vector(x / r, y / r)
                 b = self.signed_distance_bound(corner) * r
-                if b > 1.414:
-                    steps = int(b - 0.414)
+                sqrt2 = 2 ** 0.5
+                if b > sqrt2:
+                    steps = int(b - (sqrt2 - 1))
                     for x_ in xrange(x, min(x + steps, int(h_x+1))):
                         image.pixels[y][x_].draw(color)
                     x += steps
                     total_pixels += min(x + steps, int(h_x+1)) - x
                     continue
-                elif b < -1.414:
-                    steps = int(-b - 0.414)
+                elif b < -sqrt2:
+                    steps = int(-b - (sqrt2 - 1))
                     x += steps
                     continue
                 s = 0
