@@ -29,14 +29,14 @@ class Shape:
                 b = self.signed_distance_bound(corner) * r
                 sqrt2 = 2 ** 0.5
                 if b > sqrt2:
-                    steps = int(b - (sqrt2 - 1))
+                    steps = int(b - (sqrt2 - 1.0))
                     for x_ in xrange(x, min(x + steps, int(h_x+1))):
                         image.pixels[y][x_].draw(color)
                     x += steps
                     total_pixels += min(x + steps, int(h_x+1)) - x
                     continue
                 elif b < -sqrt2:
-                    steps = int(-b - (sqrt2 - 1))
+                    steps = int(-b - (sqrt2 - 1.0))
                     x += steps
                     continue
                 s = 0
